@@ -3,13 +3,14 @@ Chainlit UI for ParcelPilot Support Agent.
 
 On startup: role selector (customer / internal ops).
 Customer mode: asks for account ID → loads account name.
-Internal mode: goes straight to chat.
+Internal mode: goes straight to chat + runs proactive issue scan.
 
 Tool call steps are streamed live via Chainlit Step elements.
 """
 
 import os
 import time
+import asyncio
 import chainlit as cl
 from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
@@ -17,7 +18,7 @@ from supabase import create_client
 
 load_dotenv()
 
-# Import the compiled LangGraph and state types
+# Import after load_dotenv so env vars are available at module-level in nodes.py
 from agent.graph import graph
 from agent.state import AgentState, UserContext
 from agent.history import stamp
@@ -45,7 +46,6 @@ async def on_start():
         return
 
     role = res.get("value", "customer")
-
     if role == "customer":
         await _setup_customer()
     else:
@@ -64,7 +64,6 @@ async def _setup_customer():
 
     raw_id = account_res["output"].strip().upper()
 
-    # Verify account exists
     rows = sb.table("accounts").select("account_id,account_name").eq("account_id", raw_id).execute().data
     if not rows:
         await cl.Message(
@@ -85,11 +84,11 @@ async def _setup_customer():
     await cl.Message(
         content=(
             f"Hello, **{acct['account_name']}**!\n\n"
-            f"I'm the ParcelPilot Support Agent. I can help you with:\n"
-            f"- Order status and tracking\n"
-            f"- Service credits and cancellation queries\n"
-            f"- SLA and support ticket questions\n\n"
-            f"How can I help you today?"
+            "I'm the ParcelPilot Support Agent. I can help you with:\n"
+            "- Order status and tracking\n"
+            "- Service credits and cancellation queries\n"
+            "- SLA and support ticket questions\n\n"
+            "How can I help you today?"
         )
     ).send()
 
@@ -114,14 +113,25 @@ async def _setup_internal():
     await cl.Message(
         content=(
             f"Welcome, **{staff_name}**! Internal Ops mode active.\n\n"
-            f"You have access to all account data. I can help you:\n"
-            f"- Look up any order, account, or ticket\n"
-            f"- Check SLA breach status across accounts\n"
-            f"- Escalate tickets and create follow-up tasks\n"
-            f"- Search all policy and SOP documents\n\n"
-            f"What would you like to do?"
+            "You have access to all account data. I can help you:\n"
+            "- Look up any order, account, or ticket\n"
+            "- Check SLA breach status across accounts\n"
+            "- Escalate tickets and create follow-up tasks\n"
+            "- Search all policy and SOP documents\n\n"
+            "Running proactive issue scan…"
         )
     ).send()
+
+    # Run proactive scan in thread (it's synchronous Supabase calls)
+    try:
+        from proactive.detector import detect_issues
+        result = await asyncio.get_event_loop().run_in_executor(None, detect_issues)
+        await cl.Message(content=result["summary"], author="Proactive Scan").send()
+    except Exception as e:
+        await cl.Message(
+            content=f"Proactive scan unavailable: {e}\n\nYou can still query manually.",
+            author="Proactive Scan",
+        ).send()
 
 
 def _initial_state(user_ctx: UserContext) -> AgentState:
@@ -148,89 +158,99 @@ async def on_message(message: cl.Message):
         await cl.Message(content="Session lost. Please refresh.").send()
         return
 
-    # Add user message to state
+    # Append user message with timestamp
     human_msg = stamp(HumanMessage(content=message.content))
     state["messages"].append(human_msg)
     state["message_timestamps"].append(time.time())
 
-    # Run graph
     msg_placeholder = cl.Message(content="")
     await msg_placeholder.send()
 
-    tool_steps: dict[str, cl.Step] = {}
-    final_text  = ""
-    new_state   = state
+    # key: tool_call_id (from event metadata), value: cl.Step
+    active_steps: dict[str, cl.Step] = {}
+    final_text = ""
+    new_state  = state
 
     try:
-        # Stream events from LangGraph
         async for event in graph.astream_events(new_state, version="v2"):
             kind = event["event"]
+            tags = event.get("tags", [])
             name = event.get("name", "")
+            data = event.get("data", {})
 
-            # ── Agent streaming ───────────────────────────────────────────────
+            # ── LLM token streaming ───────────────────────────────────────────
             if kind == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, "content") and isinstance(chunk.content, str):
-                    final_text += chunk.content
-                    await msg_placeholder.stream_token(chunk.content)
+                chunk = data.get("chunk")
+                if chunk and hasattr(chunk, "content"):
+                    token = chunk.content
+                    if isinstance(token, str) and token:
+                        final_text += token
+                        await msg_placeholder.stream_token(token)
 
             # ── Tool call started ─────────────────────────────────────────────
             elif kind == "on_tool_start":
-                step = cl.Step(name=f"Tool: {name}", type="tool")
+                tool_id = event.get("run_id", name)
+                step = cl.Step(name=name, type="tool")
                 await step.__aenter__()
-                tool_steps[name] = step
-                input_data = event.get("data", {}).get("input", {})
-                step.input = str(input_data)
+                active_steps[tool_id] = step
+                inp = data.get("input", {})
+                step.input = str(inp)[:300]
 
             # ── Tool call finished ────────────────────────────────────────────
             elif kind == "on_tool_end":
-                step = tool_steps.pop(name, None)
+                tool_id = event.get("run_id", name)
+                step = active_steps.pop(tool_id, None)
                 if step:
-                    output = event.get("data", {}).get("output", "")
-                    step.output = str(output)[:500] + ("…" if len(str(output)) > 500 else "")
+                    out = data.get("output", "")
+                    step.output = str(out)[:500] + ("…" if len(str(out)) > 500 else "")
                     await step.__aexit__(None, None, None)
 
-            # ── Graph state update ────────────────────────────────────────────
+            # ── Full graph output (grab final state) ──────────────────────────
             elif kind == "on_chain_end" and name == "LangGraph":
-                new_state = event["data"].get("output", new_state)
+                new_state = data.get("output", new_state)
 
-    except Exception as e:
+    except Exception as exc:
         await msg_placeholder.update()
-        await cl.Message(content=f"An error occurred: {str(e)}\n\nPlease try again.").send()
+        await cl.Message(content=f"**Error:** {exc}\n\nPlease try again.").send()
+        # Close any open tool steps on error
+        for step in active_steps.values():
+            await step.__aexit__(None, None, None)
         return
 
-    # Close any unclosed steps
-    for step in tool_steps.values():
+    # Close any steps that didn't receive an end event
+    for step in active_steps.values():
         await step.__aexit__(None, None, None)
 
-    # Finalise the streamed message
+    # If nothing was streamed (e.g. confirm_node wrote directly), pull from state
     if not final_text:
-        # Non-streaming response (confirmation flows)
         last = new_state["messages"][-1] if new_state.get("messages") else None
         if isinstance(last, AIMessage) and isinstance(last.content, str):
             final_text = last.content
-        msg_placeholder.content = final_text
-
+    msg_placeholder.content = final_text
     await msg_placeholder.update()
 
-    # Show sources panel if available
-    if new_state.get("sources_used"):
-        sources = new_state["sources_used"]
-        source_lines = [
-            f"- **{s['source_file']}** (authority {s['authority_level']}, page {s.get('page_num','?')}): {s.get('preview','')[:80]}…"
+    # Sources panel
+    sources = new_state.get("sources_used", [])
+    if sources:
+        lines = [
+            f"- **{s['source_file']}** (authority {s['authority_level']}, p.{s.get('page_num','?')}): "
+            f"{s.get('preview','')[:80]}…"
             for s in sources[:5]
         ]
         await cl.Message(
-            content="**Sources consulted:**\n" + "\n".join(source_lines),
+            content="**Sources consulted:**\n" + "\n".join(lines),
             author="Sources",
         ).send()
 
     # Conflict warning
     if new_state.get("conflict_detected"):
         await cl.Message(
-            content="⚠️ **Conflict detected** between sources. The higher-authority source (customer agreement) was applied.",
+            content=(
+                "⚠️ **Conflict detected between sources.**\n"
+                "The higher-authority source (customer agreement) was applied. "
+                "The agent has noted which source governs."
+            ),
             author="Warning",
         ).send()
 
-    # Persist updated state
     cl.user_session.set("agent_state", new_state)

@@ -12,3 +12,8 @@ build/
 .venv/
 venv/
 env/
+
+# Data files — added locally, not committed
+data/docs/*.pdf
+data/docs/*.xlsx
+data/docs/*.xls
