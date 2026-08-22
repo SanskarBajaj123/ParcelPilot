@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tool 1: search_documents
 Semantic search over document_chunks in Supabase (pgvector).
 Embeds the query via HuggingFace Inference API, calls the search_document_chunks
@@ -12,12 +12,13 @@ from langchain_core.tools import tool
 from supabase import create_client
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path as _Path
+load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL  = os.environ["SUPABASE_URL"]
 SUPABASE_KEY  = os.environ["SUPABASE_ANON_KEY"]
 HF_TOKEN      = os.environ["HF_TOKEN"]
-HF_EMBED_URL  = "https://api-inference.huggingface.co/models/BAAI/bge-small-en-v1.5"
+HF_EMBED_URL  = "https://router.huggingface.co/hf-inference/models/BAAI/bge-small-en-v1.5"
 TOP_K         = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -31,7 +32,7 @@ def _embed(text: str) -> list[float]:
                           timeout=30)
         if resp.status_code == 200:
             result = resp.json()
-            # HF returns list of embeddings for batch; single text → first element
+            # HF returns list of embeddings for batch; single text â†’ first element
             return result[0] if isinstance(result[0], list) else result
         if resp.status_code == 503:
             time.sleep(15)
@@ -54,7 +55,7 @@ def _detect_conflict(chunks: list[dict]) -> bool:
     for c in chunks:
         if c["authority_level"] > 1:
             overlap = agreement_words & set(c["content"].lower().split())
-            if len(overlap) > 5:   # more than 5 shared content words → likely conflict
+            if len(overlap) > 5:   # more than 5 shared content words â†’ likely conflict
                 return True
     return False
 
@@ -105,3 +106,4 @@ def search_documents_fn(query: str, account_scope: str | None = None) -> dict:
         "conflict_detected": conflict,
         "sources":           sources,
     }
+

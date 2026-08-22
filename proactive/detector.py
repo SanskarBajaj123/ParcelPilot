@@ -1,5 +1,5 @@
-"""
-Proactive issue detector — for Internal Ops mode.
+﻿"""
+Proactive issue detector â€” for Internal Ops mode.
 
 Scans open tickets and orders at startup (or on demand) to surface
 P1 escalations, SLA breaches, and orders stuck in failed-pickup state.
@@ -11,10 +11,11 @@ from datetime import datetime, timezone, timedelta
 from supabase import create_client
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path as _Path
+load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]   # service role — bypasses RLS
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]   # service role â€” bypasses RLS
 SNAPSHOT_ISO = "2026-08-16T11:00:00+05:30"
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -61,7 +62,7 @@ def detect_issues() -> dict:
         for a in (sb.table("accounts").select("*").execute().data or [])
     }
 
-    # ── SLA breach scan ───────────────────────────────────────────────────────
+    # â”€â”€ SLA breach scan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     open_tickets = sb.table("tickets").select("*").eq("status", "open").execute().data or []
     sla_breaches = []
 
@@ -91,7 +92,7 @@ def detect_issues() -> dict:
     severity_order = {"P1": 0, "P2": 1, "P3": 2}
     sla_breaches.sort(key=lambda x: (severity_order.get(x["severity"], 9), -x["overage_hrs"]))
 
-    # ── Failed-pickup scan ────────────────────────────────────────────────────
+    # â”€â”€ Failed-pickup scan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     stuck_orders = (
         sb.table("orders")
           .select("*")
@@ -117,11 +118,11 @@ def detect_issues() -> dict:
 
     failed_pickups.sort(key=lambda x: -x["hours_stuck"])
 
-    # ── Format summary ────────────────────────────────────────────────────────
+    # â”€â”€ Format summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     lines = ["## Proactive Issue Scan\n"]
 
     if sla_breaches:
-        lines.append(f"### 🔴 SLA Breaches ({len(sla_breaches)} open tickets)\n")
+        lines.append(f"### ðŸ”´ SLA Breaches ({len(sla_breaches)} open tickets)\n")
         for b in sla_breaches:
             lines.append(
                 f"- **{b['ticket_id']}** | {b['account_name']} | {b['severity']} | "
@@ -129,17 +130,17 @@ def detect_issues() -> dict:
                 f"  Issue: {b['issue'][:80]}"
             )
     else:
-        lines.append("✅ No SLA breaches detected.\n")
+        lines.append("âœ… No SLA breaches detected.\n")
 
     if failed_pickups:
-        lines.append(f"\n### ⚠️ Stuck Failed-Pickup Orders ({len(failed_pickups)} orders)\n")
+        lines.append(f"\n### âš ï¸ Stuck Failed-Pickup Orders ({len(failed_pickups)} orders)\n")
         for fp in failed_pickups:
             lines.append(
                 f"- **{fp['order_id']}** | {fp['account_name']} | Carrier: {fp['carrier']} | "
                 f"Stuck {fp['hours_stuck']}h"
             )
     else:
-        lines.append("\n✅ No orders stuck in failed-pickup state.\n")
+        lines.append("\nâœ… No orders stuck in failed-pickup state.\n")
 
     return {
         "sla_breaches":   sla_breaches,
@@ -151,3 +152,4 @@ def detect_issues() -> dict:
 if __name__ == "__main__":
     result = detect_issues()
     print(result["summary"])
+

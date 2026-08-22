@@ -1,8 +1,8 @@
-"""
+﻿"""
 Tool 3: create_action
-State-changing actions — escalation, ticket update, follow-up task.
+State-changing actions â€” escalation, ticket update, follow-up task.
 When execute=False: returns a draft for user confirmation (no side effects).
-When execute=True: commits the action (mocked — logs to Supabase actions_log table).
+When execute=True: commits the action (mocked â€” logs to Supabase actions_log table).
 """
 
 import os
@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from supabase import create_client
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path as _Path
+load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
@@ -35,7 +36,7 @@ def create_action_fn(
     action_type: escalate_ticket | update_ticket_status | create_followup_task
     payload:     action-specific fields (see below per type)
     execute:     False = draft only. True = commit (after user confirms).
-    actor_name / actor_role: from user_context — injected by tool_node.
+    actor_name / actor_role: from user_context â€” injected by tool_node.
 
     Returns:
       If execute=False:  {draft: True, summary, action_type, payload}
@@ -44,7 +45,7 @@ def create_action_fn(
     if action_type not in VALID_ACTION_TYPES:
         return {"error": f"Unknown action_type '{action_type}'. Valid: {', '.join(VALID_ACTION_TYPES)}"}
 
-    # ── Build human-readable summary ─────────────────────────────────────────
+    # â”€â”€ Build human-readable summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if action_type == "escalate_ticket":
         ticket_id = payload.get("ticket_id", "?")
         reason    = payload.get("reason", "not provided")
@@ -62,7 +63,7 @@ def create_action_fn(
             return {"error": f"Invalid new_status '{new_status}'. Valid: {', '.join(VALID_STATUSES)}"}
         note   = payload.get("note", "")
         summary = (
-            f"Update ticket {ticket_id} status → '{new_status}'."
+            f"Update ticket {ticket_id} status â†’ '{new_status}'."
             + (f"\nNote: {note}" if note else "")
         )
 
@@ -76,7 +77,7 @@ def create_action_fn(
             f"  Due:  {due_hours}h from now"
         )
 
-    # ── Draft mode ────────────────────────────────────────────────────────────
+    # â”€â”€ Draft mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not execute:
         return {
             "draft":       True,
@@ -85,7 +86,7 @@ def create_action_fn(
             "summary":     summary,
         }
 
-    # ── Execute mode — commit to Supabase (mocked action log) ─────────────────
+    # â”€â”€ Execute mode â€” commit to Supabase (mocked action log) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     action_id  = str(uuid.uuid4())[:8].upper()
     timestamp  = datetime.now(timezone.utc).isoformat()
 
@@ -103,7 +104,7 @@ def create_action_fn(
     try:
         sb.table("actions_log").insert(log_row).execute()
     except Exception:
-        # actions_log table may not exist in basic Supabase setup — fail gracefully
+        # actions_log table may not exist in basic Supabase setup â€” fail gracefully
         pass
 
     return {
@@ -115,7 +116,7 @@ def create_action_fn(
     }
 
 
-# ── Optional: Supabase setup for actions_log (run once) ──────────────────────
+# â”€â”€ Optional: Supabase setup for actions_log (run once) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 ACTIONS_LOG_DDL = """
 CREATE TABLE IF NOT EXISTS actions_log (
     id          BIGSERIAL PRIMARY KEY,
@@ -129,3 +130,4 @@ CREATE TABLE IF NOT EXISTS actions_log (
     status      TEXT
 );
 """
+

@@ -1,8 +1,8 @@
-"""
+﻿"""
 Chainlit UI for ParcelPilot Support Agent.
 
 On startup: role selector (customer / internal ops).
-Customer mode: asks for account ID → loads account name.
+Customer mode: asks for account ID â†’ loads account name.
 Internal mode: goes straight to chat + runs proactive issue scan.
 
 Tool call steps are streamed live via Chainlit Step elements.
@@ -16,7 +16,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 from supabase import create_client
 
-load_dotenv()
+from pathlib import Path as _Path
+load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 # Import after load_dotenv so env vars are available at module-level in nodes.py
 from agent.graph import graph
@@ -28,7 +29,7 @@ SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ── Startup: role selection ───────────────────────────────────────────────────
+# â”€â”€ Startup: role selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @cl.on_chat_start
 async def on_start():
@@ -118,7 +119,7 @@ async def _setup_internal():
             "- Check SLA breach status across accounts\n"
             "- Escalate tickets and create follow-up tasks\n"
             "- Search all policy and SOP documents\n\n"
-            "Running proactive issue scan…"
+            "Running proactive issue scanâ€¦"
         )
     ).send()
 
@@ -147,7 +148,7 @@ def _initial_state(user_ctx: UserContext) -> AgentState:
     }
 
 
-# ── Message handler ───────────────────────────────────────────────────────────
+# â”€â”€ Message handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -178,7 +179,7 @@ async def on_message(message: cl.Message):
             name = event.get("name", "")
             data = event.get("data", {})
 
-            # ── LLM token streaming ───────────────────────────────────────────
+            # â”€â”€ LLM token streaming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if kind == "on_chat_model_stream":
                 chunk = data.get("chunk")
                 if chunk and hasattr(chunk, "content"):
@@ -187,7 +188,7 @@ async def on_message(message: cl.Message):
                         final_text += token
                         await msg_placeholder.stream_token(token)
 
-            # ── Tool call started ─────────────────────────────────────────────
+            # â”€â”€ Tool call started â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             elif kind == "on_tool_start":
                 tool_id = event.get("run_id", name)
                 step = cl.Step(name=name, type="tool")
@@ -196,16 +197,16 @@ async def on_message(message: cl.Message):
                 inp = data.get("input", {})
                 step.input = str(inp)[:300]
 
-            # ── Tool call finished ────────────────────────────────────────────
+            # â”€â”€ Tool call finished â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             elif kind == "on_tool_end":
                 tool_id = event.get("run_id", name)
                 step = active_steps.pop(tool_id, None)
                 if step:
                     out = data.get("output", "")
-                    step.output = str(out)[:500] + ("…" if len(str(out)) > 500 else "")
+                    step.output = str(out)[:500] + ("â€¦" if len(str(out)) > 500 else "")
                     await step.__aexit__(None, None, None)
 
-            # ── Full graph output (grab final state) ──────────────────────────
+            # â”€â”€ Full graph output (grab final state) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             elif kind == "on_chain_end" and name == "LangGraph":
                 new_state = data.get("output", new_state)
 
@@ -234,7 +235,7 @@ async def on_message(message: cl.Message):
     if sources:
         lines = [
             f"- **{s['source_file']}** (authority {s['authority_level']}, p.{s.get('page_num','?')}): "
-            f"{s.get('preview','')[:80]}…"
+            f"{s.get('preview','')[:80]}â€¦"
             for s in sources[:5]
         ]
         await cl.Message(
@@ -246,7 +247,7 @@ async def on_message(message: cl.Message):
     if new_state.get("conflict_detected"):
         await cl.Message(
             content=(
-                "⚠️ **Conflict detected between sources.**\n"
+                "âš ï¸ **Conflict detected between sources.**\n"
                 "The higher-authority source (customer agreement) was applied. "
                 "The agent has noted which source governs."
             ),
@@ -254,3 +255,4 @@ async def on_message(message: cl.Message):
         ).send()
 
     cl.user_session.set("agent_state", new_state)
+

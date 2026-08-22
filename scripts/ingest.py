@@ -1,7 +1,7 @@
-"""
-Ingestion script — run once to populate Supabase with:
-  1. PDF documents → chunked → embedded → document_chunks table
-  2. Excel structured data → accounts / orders / tickets tables
+﻿"""
+Ingestion script â€” run once to populate Supabase with:
+  1. PDF documents â†’ chunked â†’ embedded â†’ document_chunks table
+  2. Excel structured data â†’ accounts / orders / tickets tables
 
 Usage:
     python scripts/ingest.py
@@ -15,28 +15,29 @@ import time
 import json
 import math
 import httpx
-import fitz          # PyMuPDF
+import pymupdf as fitz   # PyMuPDF
 import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client
 
-load_dotenv()
+from pathlib import Path as _Path
+load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL        = os.environ["SUPABASE_URL"]
 SUPABASE_SVC_KEY    = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 HF_TOKEN            = os.environ["HF_TOKEN"]
 HF_EMBED_MODEL      = "BAAI/bge-small-en-v1.5"
-HF_EMBED_URL        = f"https://api-inference.huggingface.co/models/{HF_EMBED_MODEL}"
+HF_EMBED_URL        = f"https://router.huggingface.co/hf-inference/models/{HF_EMBED_MODEL}"
 
 DATA_DIR  = Path(__file__).parent.parent / "data"
 DOCS_DIR  = DATA_DIR / "docs"
-XLSX_PATH = DATA_DIR / "ParcelPilot_Assessment_Data.xlsx"
+XLSX_PATH = DOCS_DIR / "ParcelPilot_Assessment_Data.xlsx"
 
 CHUNK_SIZE    = 400   # tokens (approx chars / 4)
 CHUNK_OVERLAP = 60
 
-# Document metadata — authority and deprecation flags
+# Document metadata â€” authority and deprecation flags
 DOC_META = {
     "01_Support_Policy_v3_CURRENT.pdf":                   {"authority_level": 2, "is_deprecated": False, "doc_type": "policy",      "account_scope": None},
     "02_Support_Policy_v2_DEPRECATED.pdf":                {"authority_level": 2, "is_deprecated": True,  "doc_type": "policy",      "account_scope": None},
@@ -49,7 +50,7 @@ DOC_META = {
 sb = create_client(SUPABASE_URL, SUPABASE_SVC_KEY)
 
 
-# ── Embedding via HuggingFace Inference API ─────────────────────────────────
+# â”€â”€ Embedding via HuggingFace Inference API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """Call HF Inference API for a batch of texts. Returns list of embeddings."""
@@ -60,14 +61,14 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         if resp.status_code == 200:
             return resp.json()
         if resp.status_code == 503:   # model loading
-            print(f"  Model loading, waiting 20s… (attempt {attempt+1})")
+            print(f"  Model loading, waiting 20sâ€¦ (attempt {attempt+1})")
             time.sleep(20)
         else:
             resp.raise_for_status()
     raise RuntimeError("HF Inference API failed after 3 attempts")
 
 
-# ── PDF chunking ─────────────────────────────────────────────────────────────
+# â”€â”€ PDF chunking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     """Split text into overlapping chunks by approximate token count."""
@@ -117,11 +118,11 @@ def ingest_pdfs():
                 })
                 chunk_idx += 1
 
-        print(f"  Parsed: {pdf_file} → {chunk_idx} chunks")
+        print(f"  Parsed: {pdf_file} â†’ {chunk_idx} chunks")
 
     # Embed in batches of 20
     BATCH = 20
-    print(f"\n  Embedding {len(all_rows)} chunks via HuggingFace ({HF_EMBED_MODEL})…")
+    print(f"\n  Embedding {len(all_rows)} chunks via HuggingFace ({HF_EMBED_MODEL})â€¦")
     for i in range(0, len(all_rows), BATCH):
         batch = all_rows[i : i + BATCH]
         texts = [r["content"] for r in batch]
@@ -132,13 +133,13 @@ def ingest_pdfs():
         time.sleep(0.5)   # rate limit courtesy
 
     # Insert into Supabase
-    print("  Inserting into Supabase…")
+    print("  Inserting into Supabaseâ€¦")
     for i in range(0, len(all_rows), 50):
         sb.table("document_chunks").insert(all_rows[i : i + 50]).execute()
-    print(f"  Done — {len(all_rows)} chunks inserted.")
+    print(f"  Done â€” {len(all_rows)} chunks inserted.")
 
 
-# ── Structured data ──────────────────────────────────────────────────────────
+# â”€â”€ Structured data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def ingest_structured():
     print("\n=== Ingesting Structured Data (xlsx) ===")
@@ -221,3 +222,4 @@ if __name__ == "__main__":
     ingest_pdfs()
     ingest_structured()
     print("\nIngestion complete.")
+

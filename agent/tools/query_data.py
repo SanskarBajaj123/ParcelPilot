@@ -1,8 +1,8 @@
-"""
+﻿"""
 Tool 2: query_data
 Structured queries against Supabase (accounts, orders, tickets).
 Access control: sets Supabase session context so RLS enforces account scoping.
-All queries use parameterised calls — no raw SQL injection risk.
+All queries use parameterised calls â€” no raw SQL injection risk.
 """
 
 import os
@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from supabase import create_client
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path as _Path
+load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
@@ -49,11 +50,11 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
       calculate_credit_eligibility  params: {order_id}
       check_sla_breach              params: {ticket_id}
 
-    role / account_id are injected from user_context by the tool_node — never from model args.
+    role / account_id are injected from user_context by the tool_node â€” never from model args.
     """
     _set_rls_context(role, account_id)
 
-    # ── lookup_order ────────────────────────────────────────────────────────
+    # â”€â”€ lookup_order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if intent == "lookup_order":
         oid = params.get("order_id", "")
         rows = sb.table("orders").select("*").eq("order_id", oid).execute().data
@@ -65,7 +66,7 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
             order["hours_past_pickup_window"] = _elapsed_hours(order["pickup_window_end"])
         return {"order": order}
 
-    # ── lookup_account ──────────────────────────────────────────────────────
+    # â”€â”€ lookup_account â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     elif intent == "lookup_account":
         aid = params.get("account_id") or account_id
         rows = sb.table("accounts").select("*").eq("account_id", aid).execute().data
@@ -73,7 +74,7 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
             return {"error": f"Account {aid} not found (or not accessible)."}
         return {"account": rows[0]}
 
-    # ── list_open_tickets ───────────────────────────────────────────────────
+    # â”€â”€ list_open_tickets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     elif intent == "list_open_tickets":
         q = sb.table("tickets").select("*").eq("status", "open")
         if role == "customer":
@@ -81,7 +82,7 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
         rows = q.order("created_at", desc=True).execute().data
         return {"tickets": rows, "count": len(rows)}
 
-    # ── calculate_credit_eligibility ────────────────────────────────────────
+    # â”€â”€ calculate_credit_eligibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     elif intent == "calculate_credit_eligibility":
         oid = params.get("order_id", "")
         rows = sb.table("orders").select("*").eq("order_id", oid).execute().data
@@ -101,14 +102,14 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
         # Default SOP thresholds
         threshold_hours  = 2.0
         credit_amount    = None
-        credit_formula   = f"min(500, 10% of ₹{fee:.0f}) = ₹{min(500, fee * 0.1):.0f}"
+        credit_formula   = f"min(500, 10% of â‚¹{fee:.0f}) = â‚¹{min(500, fee * 0.1):.0f}"
         override_applied = False
 
-        # LumenWorks override: 4h threshold, fixed ₹300
+        # LumenWorks override: 4h threshold, fixed â‚¹300
         if order["account_id"] == "ACCT-002":
             threshold_hours  = 4.0
             credit_amount    = 300.0
-            credit_formula   = "Fixed ₹300 (LumenWorks agreement override)"
+            credit_formula   = "Fixed â‚¹300 (LumenWorks agreement override)"
             override_applied = True
 
         eligible = (
@@ -136,7 +137,7 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
             "needs_manager_approval": eligible and credit_amount is not None and credit_amount > 1000,
         }
 
-    # ── check_sla_breach ────────────────────────────────────────────────────
+    # â”€â”€ check_sla_breach â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     elif intent == "check_sla_breach":
         tid = params.get("ticket_id", "")
         rows = sb.table("tickets").select("*").eq("ticket_id", tid).execute().data
@@ -151,7 +152,7 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
         # SLA targets from v3 policy + account-specific overrides
         SLA = {
             "ACCT-001": {"P1": 0.25, "P2": 1.0,  "P3": 8.0},   # Northstar agreement (hours)
-            "ACCT-002": {"P1": 2.0,  "P2": 4.0,  "P3": 48.0},  # LumenWorks (2 biz days ≈ 48h)
+            "ACCT-002": {"P1": 2.0,  "P2": 4.0,  "P3": 48.0},  # LumenWorks (2 biz days â‰ˆ 48h)
         }
         default_sla = {
             "Enterprise": {"P1": 0.5,  "P2": 2.0,  "P3": 24.0},
@@ -180,3 +181,4 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
 
     else:
         return {"error": f"Unknown intent: {intent}. Valid: lookup_order, lookup_account, list_open_tickets, calculate_credit_eligibility, check_sla_breach"}
+
