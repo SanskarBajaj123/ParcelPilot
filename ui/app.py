@@ -24,9 +24,11 @@ from agent.graph import graph
 from agent.state import AgentState, UserContext
 from agent.history import stamp
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_URL  = os.environ["SUPABASE_URL"]
+SUPABASE_KEY  = os.environ["SUPABASE_ANON_KEY"]
+SUPABASE_SVC  = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+sb     = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb_svc = create_client(SUPABASE_URL, SUPABASE_SVC)  # bypasses RLS for account lookup
 
 
 # â”€â”€ Startup: role selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -36,8 +38,8 @@ async def on_start():
     res = await cl.AskActionMessage(
         content="Welcome to **ParcelPilot Support**. How are you accessing this system?",
         actions=[
-            cl.Action(name="customer",  label="Customer Portal",     value="customer"),
-            cl.Action(name="internal",  label="Internal Support Ops", value="internal"),
+            cl.Action(name="customer",  label="Customer Portal",     payload={"role": "customer"}),
+            cl.Action(name="internal",  label="Internal Support Ops", payload={"role": "internal"}),
         ],
         timeout=120,
     ).send()
@@ -46,7 +48,7 @@ async def on_start():
         await cl.Message(content="Session timed out. Please refresh.").send()
         return
 
-    role = res.get("value", "customer")
+    role = res.get("payload", {}).get("role", "customer")
     if role == "customer":
         await _setup_customer()
     else:
@@ -65,7 +67,7 @@ async def _setup_customer():
 
     raw_id = account_res["output"].strip().upper()
 
-    rows = sb.table("accounts").select("account_id,account_name").eq("account_id", raw_id).execute().data
+    rows = sb_svc.table("accounts").select("account_id,account_name").eq("account_id", raw_id).execute().data
     if not rows:
         await cl.Message(
             content=f"Account **{raw_id}** not found. Please check your Account ID and refresh."
