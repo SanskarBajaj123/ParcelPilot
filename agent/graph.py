@@ -1,4 +1,4 @@
-"""
+﻿"""
 LangGraph StateGraph definition for ParcelPilot Support Agent.
 
 Flow:
@@ -75,8 +75,8 @@ def build_graph() -> StateGraph:
     # After tools: always go back to agent
     builder.add_edge("tool_node", "agent_node")
 
-    # After confirm: back to agent for a response
-    builder.add_edge("confirm_node", "agent_node")
+    # After confirm: the node itself produces the final AIMessage, end the turn
+    builder.add_edge("confirm_node", END)
 
     return builder.compile()
 

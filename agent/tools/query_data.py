@@ -2,7 +2,7 @@
 Tool 2: query_data
 Structured queries against Supabase (accounts, orders, tickets).
 Access control: sets Supabase session context so RLS enforces account scoping.
-All queries use parameterised calls â€” no raw SQL injection risk.
+All queries use parameterised calls â€" no raw SQL injection risk.
 """
 
 import os
@@ -14,8 +14,10 @@ from pathlib import Path as _Path
 load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
-SNAPSHOT_ISO = "2026-08-16T11:00:00+05:30"   # reference time from xlsx README
+# Service role key: RLS is stateless across REST calls; Python-level filtering
+# below is the authoritative access control layer for this tool.
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SNAPSHOT_ISO = "2026-08-16T11:00:00+00:00"   # 11:00 UTC = 16:30 IST; reference snapshot
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 SNAPSHOT_DT  = datetime.fromisoformat(SNAPSHOT_ISO)
@@ -50,15 +52,17 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
       calculate_credit_eligibility  params: {order_id}
       check_sla_breach              params: {ticket_id}
 
-    role / account_id are injected from user_context by the tool_node â€” never from model args.
+    role / account_id are injected from user_context by the tool_node â€" never from model args.
     """
     _set_rls_context(role, account_id)
 
-    # â”€â”€ lookup_order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ lookup_order â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if intent == "lookup_order":
         oid = params.get("order_id", "")
         rows = sb.table("orders").select("*").eq("order_id", oid).execute().data
         if not rows:
+            return {"error": f"Order {oid} not found (or not accessible)."}
+        if role == "customer" and rows[0]["account_id"] != account_id:
             return {"error": f"Order {oid} not found (or not accessible)."}
         order = rows[0]
         # Attach computed fields
@@ -66,15 +70,17 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
             order["hours_past_pickup_window"] = _elapsed_hours(order["pickup_window_end"])
         return {"order": order}
 
-    # â”€â”€ lookup_account â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ lookup_account â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elif intent == "lookup_account":
         aid = params.get("account_id") or account_id
+        if role == "customer" and aid != account_id:
+            return {"error": f"Account {aid} not accessible."}
         rows = sb.table("accounts").select("*").eq("account_id", aid).execute().data
         if not rows:
             return {"error": f"Account {aid} not found (or not accessible)."}
         return {"account": rows[0]}
 
-    # â”€â”€ list_open_tickets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ list_open_tickets â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elif intent == "list_open_tickets":
         q = sb.table("tickets").select("*").eq("status", "open")
         if role == "customer":
@@ -82,7 +88,7 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
         rows = q.order("created_at", desc=True).execute().data
         return {"tickets": rows, "count": len(rows)}
 
-    # â”€â”€ calculate_credit_eligibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ calculate_credit_eligibility â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elif intent == "calculate_credit_eligibility":
         oid = params.get("order_id", "")
         rows = sb.table("orders").select("*").eq("order_id", oid).execute().data
@@ -137,11 +143,13 @@ def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") ->
             "needs_manager_approval": eligible and credit_amount is not None and credit_amount > 1000,
         }
 
-    # â”€â”€ check_sla_breach â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ check_sla_breach â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elif intent == "check_sla_breach":
         tid = params.get("ticket_id", "")
         rows = sb.table("tickets").select("*").eq("ticket_id", tid).execute().data
         if not rows:
+            return {"error": f"Ticket {tid} not found."}
+        if role == "customer" and rows[0]["account_id"] != account_id:
             return {"error": f"Ticket {tid} not found."}
         ticket = rows[0]
 

@@ -166,11 +166,11 @@ Or integrate it into the Chainlit startup for internal sessions (already wired i
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MISTRAL_API_KEY` | ✅ | — | Mistral AI API key |
-| `HF_TOKEN` | ✅ | — | HuggingFace Inference API token |
-| `SUPABASE_URL` | ✅ | — | Supabase project URL |
-| `SUPABASE_ANON_KEY` | ✅ | — | Supabase anon/public key |
-| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | — | Supabase service role key (ingestion only) |
+| `MISTRAL_API_KEY` | ✅ | - | Mistral AI API key |
+| `HF_TOKEN` | ✅ | - | HuggingFace Inference API token |
+| `SUPABASE_URL` | ✅ | - | Supabase project URL |
+| `SUPABASE_ANON_KEY` | ✅ | - | Supabase anon/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | - | Supabase service role key (ingestion only) |
 | `HISTORY_WINDOW_HOURS` | ❌ | `1` | Hours of conversation to retain |
 | `MAX_HISTORY_MESSAGES` | ❌ | `30` | Hard cap on message count |
 | `RETRIEVAL_TOP_K` | ❌ | `5` | Number of document chunks per search |

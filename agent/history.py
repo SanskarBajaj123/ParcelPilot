@@ -35,7 +35,7 @@ def filter_history(
 ) -> list[BaseMessage]:
     """
     Return the slice of messages that fall within the time window
-    AND within the max_messages cap — whichever is more restrictive.
+    AND within the max_messages cap, whichever is more restrictive.
     Tool-call pairs are kept intact.
     """
     if not messages:

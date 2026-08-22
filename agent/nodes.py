@@ -1,4 +1,4 @@
-"""
+﻿"""
 LangGraph nodes: agent_node, tool_node, confirm_node.
 """
 
@@ -115,21 +115,50 @@ def agent_node(state: AgentState) -> dict:
         max_messages=MAX_HISTORY_MESSAGES,
     )
 
-    # Retrieve relevant docs for the latest human message (if any)
+    # Retrieve relevant docs for the latest human message (if any).
+    # Skip on the second agent call (after tool_node ran) - tool results are already
+    # in the message history, and sources_used was set by tool_node.
     retrieved_ctx_block = ""
-    latest_human = next(
-        (m for m in reversed(history) if isinstance(m, HumanMessage)), None
-    )
-    if latest_human:
-        account_scope = user_ctx.get("account_id") if user_ctx["role"] == "customer" else None
-        search_result = search_documents_fn(
-            query=latest_human.content if isinstance(latest_human.content, str) else str(latest_human.content),
-            account_scope=account_scope,
+    preemptive_sources  = []
+    preemptive_conflict = False
+    last_msg = state["messages"][-1] if state["messages"] else None
+    is_after_tools = isinstance(last_msg, ToolMessage)
+
+    if not is_after_tools:
+        latest_human = next(
+            (m for m in reversed(history) if isinstance(m, HumanMessage)), None
         )
-        retrieved_ctx_block = build_retrieved_context_block(
-            search_result["chunks"],
-            search_result["conflict_detected"],
-        )
+        if latest_human:
+            role          = user_ctx["role"]
+            account_scope = user_ctx.get("account_id") if role == "customer" else None
+            account_name  = user_ctx.get("account_name", "")
+            raw_query     = latest_human.content if isinstance(latest_human.content, str) else str(latest_human.content)
+
+            # For customers, append their account name to bias retrieval toward their agreement doc
+            enhanced_query = f"{raw_query} {account_name} agreement" if (role == "customer" and account_name) else raw_query
+
+            search_result = search_documents_fn(query=enhanced_query, account_scope=account_scope)
+
+            # Fallback: if no customer-agreement chunk surfaced, do a targeted agreement search
+            if role == "customer" and account_name and not any(c["authority_level"] == 1 for c in search_result["chunks"]):
+                targeted = search_documents_fn(
+                    query=f"{account_name} service agreement SLA priority response time credit cancellation",
+                    account_scope=account_scope,
+                )
+                existing = {c.get("id") for c in search_result["chunks"]}
+                for chunk in targeted["chunks"]:
+                    if chunk["authority_level"] == 1 and chunk.get("id") not in existing:
+                        search_result["chunks"].append(chunk)
+                if targeted["conflict_detected"]:
+                    search_result["conflict_detected"] = True
+                search_result["chunks"].sort(key=lambda c: (c["authority_level"], -c.get("similarity", 0)))
+
+            retrieved_ctx_block = build_retrieved_context_block(
+                search_result["chunks"],
+                search_result["conflict_detected"],
+            )
+            preemptive_sources  = search_result.get("sources", [])
+            preemptive_conflict = search_result["conflict_detected"]
 
     # Build message list for LLM
     messages_for_llm = [SystemMessage(content=sys_prompt)]
@@ -146,12 +175,16 @@ def agent_node(state: AgentState) -> dict:
     response = llm.invoke(messages_for_llm)
     stamped  = stamp(response)
 
-    return {
+    out: dict = {
         "messages":             [stamped],
         "tool_calls_this_turn": [tc["name"] for tc in (response.tool_calls or [])],
-        "sources_used":         [],
-        "conflict_detected":    False,
     }
+    if not is_after_tools:
+        # First call: emit pre-emptive search sources (may be overwritten by tool_node)
+        out["sources_used"]      = preemptive_sources
+        out["conflict_detected"] = preemptive_conflict
+    # Second call (after tools): leave sources_used alone - tool_node already set it
+    return out
 
 
 # ── tool_node ─────────────────────────────────────────────────────────────────
@@ -159,7 +192,7 @@ def agent_node(state: AgentState) -> dict:
 def tool_node(state: AgentState) -> dict:
     """
     Dispatches tool calls from the latest AIMessage.
-    Injects user_context into every tool call — model cannot override access control.
+    Injects user_context into every tool call -- model cannot override access control.
     """
     user_ctx    = state["user_context"]
     role        = user_ctx["role"]
@@ -170,6 +203,8 @@ def tool_node(state: AgentState) -> dict:
     tool_msgs   = []
     all_sources = []
     conflict    = False
+
+    pending_confirmation = None   # set if create_action(execute=False) is called
 
     for tc in (last_ai.tool_calls or []):
         name   = tc["name"]
@@ -223,19 +258,15 @@ def tool_node(state: AgentState) -> dict:
             )
 
             if result.get("draft"):
-                # Set confirmation gate
-                pending = {
+                # Store pending -- don't return early, so remaining tool calls
+                # still get their ToolMessages (avoids Mistral mismatch error)
+                pending_confirmation = {
                     "action_type": result["action_type"],
                     "payload":     result["payload"],
                     "summary":     result["summary"],
                 }
-                return {
-                    "messages":             [stamp(ToolMessage(content=result["summary"], tool_call_id=tc_id))],
-                    "confirmation_state":   "PENDING_CONFIRMATION",
-                    "pending_action":       pending,
-                    "sources_used":         all_sources,
-                    "conflict_detected":    conflict,
-                }
+                tool_msgs.append(stamp(ToolMessage(content=result["summary"], tool_call_id=tc_id)))
+                continue
 
             tool_msgs.append(stamp(ToolMessage(content=json.dumps(result), tool_call_id=tc_id)))
 
@@ -245,11 +276,15 @@ def tool_node(state: AgentState) -> dict:
                 tool_call_id=tc_id,
             )))
 
-    return {
+    out: dict = {
         "messages":          tool_msgs,
         "sources_used":      all_sources,
         "conflict_detected": conflict,
     }
+    if pending_confirmation:
+        out["confirmation_state"] = "PENDING_CONFIRMATION"
+        out["pending_action"]     = pending_confirmation
+    return out
 
 
 # ── confirm_node ──────────────────────────────────────────────────────────────
@@ -288,7 +323,7 @@ def confirm_node(state: AgentState) -> dict:
         }
 
     elif cancelled:
-        reply = AIMessage(content="Understood — action cancelled. Let me know if you'd like to do something else.")
+        reply = AIMessage(content="Understood -- action cancelled. Let me know if you'd like to do something else.")
         return {
             "messages":           [stamp(reply)],
             "confirmation_state": "IDLE",
@@ -296,7 +331,7 @@ def confirm_node(state: AgentState) -> dict:
         }
 
     else:
-        # Ambiguous — re-ask
+        # Ambiguous -- re-ask
         reply = AIMessage(
             content=(
                 f"I need a clear yes or no to proceed.\n\n"

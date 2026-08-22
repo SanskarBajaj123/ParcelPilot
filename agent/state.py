@@ -1,5 +1,5 @@
 """
-AgentState and UserContext — shared across all LangGraph nodes.
+AgentState and UserContext: shared across all LangGraph nodes.
 """
 
 import time

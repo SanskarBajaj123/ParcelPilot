@@ -1,0 +1,551 @@
+/* ============================================================
+   ParcelPilot Support Agent - Custom Theme
+   Deep navy + logistics orange design system
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+/* ============================================================
+   CSS TOKENS
+   ============================================================ */
+:root {
+  --pp-bg:           #090E1A;
+  --pp-surface:      #111827;
+  --pp-surface-2:    #1A2535;
+  --pp-surface-3:    #1E2D40;
+  --pp-border:       #1E2D3D;
+  --pp-border-light: #243448;
+  --pp-orange:       #F07822;
+  --pp-orange-dim:   #C0601A;
+  --pp-blue:         #3B82F6;
+  --pp-teal:         #14B8A6;
+  --pp-green:        #10B981;
+  --pp-yellow:       #F59E0B;
+  --pp-red:          #EF4444;
+  --pp-text:         #E2E8F0;
+  --pp-text-dim:     #94A3B8;
+  --pp-text-faint:   #475569;
+  --pp-mono:         'IBM Plex Mono', 'Fira Code', monospace;
+  --pp-sans:         'IBM Plex Sans', system-ui, sans-serif;
+  --pp-radius:       8px;
+  --pp-radius-lg:    12px;
+}
+
+/* ============================================================
+   GLOBAL BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  background-color: var(--pp-bg) !important;
+  font-family: var(--pp-sans) !important;
+  color: var(--pp-text) !important;
+}
+
+/* Override Chainlit's built-in CSS variables */
+:root {
+  --background: var(--pp-bg) !important;
+  --foreground: var(--pp-text) !important;
+  --muted: var(--pp-surface-2) !important;
+  --muted-foreground: var(--pp-text-dim) !important;
+  --border: var(--pp-border) !important;
+  --input: var(--pp-surface-2) !important;
+  --ring: var(--pp-orange) !important;
+  --accent: var(--pp-orange) !important;
+  --primary: var(--pp-orange) !important;
+}
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+header,
+[class*="Header"],
+nav[class*="header"],
+div[class*="navbar"] {
+  background: var(--pp-surface) !important;
+  border-bottom: 1px solid var(--pp-border) !important;
+  backdrop-filter: blur(8px);
+}
+
+/* Brand text in header area */
+header span[class*="title"],
+header [class*="name"],
+[class*="AppName"] {
+  font-family: var(--pp-sans) !important;
+  font-weight: 700 !important;
+  font-size: 15px !important;
+  color: var(--pp-orange) !important;
+  letter-spacing: 0.02em;
+}
+
+/* Header buttons (Readme, our injected buttons) */
+header button,
+nav button,
+[class*="header"] button {
+  font-family: var(--pp-sans) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--pp-text-dim) !important;
+  border-radius: var(--pp-radius) !important;
+  transition: color 0.15s, background 0.15s !important;
+}
+
+header button:hover,
+nav button:hover {
+  color: var(--pp-text) !important;
+  background: var(--pp-surface-2) !important;
+}
+
+/* Our custom injected header buttons */
+#pp-header-btn-logs,
+#pp-header-btn-mock {
+  font-family: var(--pp-sans) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--pp-text-dim) !important;
+  background: transparent !important;
+  border: 1px solid var(--pp-border) !important;
+  border-radius: var(--pp-radius) !important;
+  padding: 4px 12px !important;
+  cursor: pointer !important;
+  transition: all 0.15s !important;
+}
+
+#pp-header-btn-logs:hover,
+#pp-header-btn-mock:hover {
+  color: var(--pp-orange) !important;
+  border-color: var(--pp-orange) !important;
+  background: rgba(240, 120, 34, 0.08) !important;
+}
+
+/* ============================================================
+   MAIN CHAT AREA
+   ============================================================ */
+main,
+[id="chat-view"],
+[class*="chat-container"],
+[class*="ChatContainer"],
+[class*="messages"] {
+  background-color: var(--pp-bg) !important;
+}
+
+/* ============================================================
+   MESSAGE BUBBLES
+   ============================================================ */
+
+/* User messages */
+[class*="UserMessage"],
+[data-role="user"] [class*="message"],
+[class*="human"] [class*="bubble"] {
+  background: var(--pp-surface-3) !important;
+  border: 1px solid var(--pp-border-light) !important;
+  border-radius: var(--pp-radius-lg) !important;
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+}
+
+/* Assistant messages */
+[class*="AssistantMessage"],
+[data-role="assistant"] [class*="message"],
+[class*="assistant"] [class*="bubble"] {
+  background: var(--pp-surface) !important;
+  border: 1px solid var(--pp-border) !important;
+  border-radius: var(--pp-radius-lg) !important;
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+}
+
+/* Generic message cards */
+[class*="MessageCard"],
+[class*="message-card"],
+[class*="MessageContent"] {
+  background: transparent !important;
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 14px !important;
+  line-height: 1.65 !important;
+}
+
+/* Author labels */
+[class*="author"],
+[class*="Author"] {
+  font-family: var(--pp-mono) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--pp-text-faint) !important;
+}
+
+/* ============================================================
+   TOOL CALL STEPS
+   ============================================================ */
+[class*="Step"],
+[class*="step-container"],
+details[class*="step"] {
+  background: var(--pp-surface-2) !important;
+  border: 1px solid var(--pp-border) !important;
+  border-left: 3px solid var(--pp-orange) !important;
+  border-radius: var(--pp-radius) !important;
+  font-family: var(--pp-mono) !important;
+  font-size: 12px !important;
+  margin: 6px 0 !important;
+}
+
+[class*="Step"] summary,
+[class*="step"] summary {
+  color: var(--pp-orange) !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+}
+
+[class*="Step"] pre,
+[class*="step"] pre,
+[class*="StepOutput"] {
+  background: var(--pp-bg) !important;
+  color: var(--pp-teal) !important;
+  font-family: var(--pp-mono) !important;
+  font-size: 11.5px !important;
+  border-radius: 4px !important;
+  padding: 8px !important;
+  overflow-x: auto !important;
+}
+
+/* ============================================================
+   MARKDOWN WITHIN MESSAGES
+   ============================================================ */
+[class*="markdown"] h1,
+[class*="markdown"] h2,
+[class*="markdown"] h3 {
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+  font-weight: 600 !important;
+  margin-top: 1.2em !important;
+  margin-bottom: 0.4em !important;
+}
+
+[class*="markdown"] h2 {
+  border-bottom: 1px solid var(--pp-border) !important;
+  padding-bottom: 6px !important;
+  color: var(--pp-orange) !important;
+}
+
+[class*="markdown"] code {
+  background: var(--pp-surface-2) !important;
+  color: var(--pp-teal) !important;
+  font-family: var(--pp-mono) !important;
+  font-size: 0.88em !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+  border: 1px solid var(--pp-border) !important;
+}
+
+[class*="markdown"] pre {
+  background: var(--pp-surface-2) !important;
+  border: 1px solid var(--pp-border) !important;
+  border-radius: var(--pp-radius) !important;
+  overflow-x: auto !important;
+}
+
+[class*="markdown"] pre code {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: var(--pp-teal) !important;
+}
+
+[class*="markdown"] table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-size: 13px !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+[class*="markdown"] th {
+  background: var(--pp-surface-2) !important;
+  color: var(--pp-text-dim) !important;
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+  padding: 8px 12px !important;
+  border-bottom: 2px solid var(--pp-border-light) !important;
+  text-align: left !important;
+}
+
+[class*="markdown"] td {
+  padding: 8px 12px !important;
+  border-bottom: 1px solid var(--pp-border) !important;
+  color: var(--pp-text) !important;
+}
+
+[class*="markdown"] tr:hover td {
+  background: var(--pp-surface-2) !important;
+}
+
+[class*="markdown"] blockquote {
+  border-left: 3px solid var(--pp-orange) !important;
+  margin: 0 !important;
+  padding: 4px 12px !important;
+  color: var(--pp-text-dim) !important;
+  background: rgba(240, 120, 34, 0.05) !important;
+  border-radius: 0 var(--pp-radius) var(--pp-radius) 0 !important;
+}
+
+[class*="markdown"] strong {
+  color: var(--pp-text) !important;
+  font-weight: 600 !important;
+}
+
+[class*="markdown"] a {
+  color: var(--pp-blue) !important;
+  text-decoration: none !important;
+}
+
+[class*="markdown"] a:hover {
+  color: var(--pp-orange) !important;
+  text-decoration: underline !important;
+}
+
+/* ============================================================
+   ACTION BUTTONS (message-level)
+   ============================================================ */
+[class*="Action"],
+[class*="action-button"],
+button[class*="action"] {
+  background: var(--pp-surface-2) !important;
+  border: 1px solid var(--pp-border-light) !important;
+  color: var(--pp-text-dim) !important;
+  border-radius: var(--pp-radius) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  padding: 5px 14px !important;
+  cursor: pointer !important;
+  transition: all 0.15s !important;
+}
+
+[class*="Action"]:hover,
+button[class*="action"]:hover {
+  background: rgba(240, 120, 34, 0.12) !important;
+  border-color: var(--pp-orange) !important;
+  color: var(--pp-orange) !important;
+}
+
+/* ============================================================
+   INPUT COMPOSER
+   ============================================================ */
+[class*="Composer"],
+[class*="composer"],
+[class*="input-box"],
+[id="chat-input"],
+form[class*="input"] {
+  background: var(--pp-surface) !important;
+  border: 1px solid var(--pp-border-light) !important;
+  border-radius: var(--pp-radius-lg) !important;
+  transition: border-color 0.2s !important;
+}
+
+[class*="Composer"]:focus-within,
+[class*="composer"]:focus-within,
+form[class*="input"]:focus-within {
+  border-color: var(--pp-orange) !important;
+  box-shadow: 0 0 0 2px rgba(240, 120, 34, 0.15) !important;
+}
+
+textarea,
+[class*="Composer"] input,
+[class*="composer"] textarea {
+  background: transparent !important;
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 14px !important;
+  caret-color: var(--pp-orange) !important;
+}
+
+textarea::placeholder {
+  color: var(--pp-text-faint) !important;
+}
+
+/* Send button */
+button[type="submit"],
+[class*="SendButton"],
+[class*="send-button"] {
+  background: var(--pp-orange) !important;
+  color: #fff !important;
+  border-radius: 8px !important;
+  border: none !important;
+  transition: background 0.15s, transform 0.1s !important;
+}
+
+button[type="submit"]:hover,
+[class*="SendButton"]:hover {
+  background: var(--pp-orange-dim) !important;
+  transform: scale(1.04) !important;
+}
+
+/* Attachment icon */
+[class*="attach"],
+[class*="Attach"],
+[class*="upload"] {
+  color: var(--pp-text-faint) !important;
+}
+
+[class*="attach"]:hover,
+[class*="Attach"]:hover {
+  color: var(--pp-orange) !important;
+}
+
+/* ============================================================
+   SIDEBAR / CHAT HISTORY
+   ============================================================ */
+aside,
+[class*="Sidebar"],
+[class*="sidebar"],
+[class*="ChatHistory"] {
+  background: var(--pp-surface) !important;
+  border-right: 1px solid var(--pp-border) !important;
+}
+
+[class*="thread"],
+[class*="Thread"],
+[class*="chat-item"] {
+  color: var(--pp-text-dim) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 13px !important;
+  border-radius: var(--pp-radius) !important;
+}
+
+[class*="thread"]:hover,
+[class*="Thread"]:hover {
+  background: var(--pp-surface-2) !important;
+  color: var(--pp-text) !important;
+}
+
+[class*="thread"][data-active="true"],
+[class*="Thread"][aria-current] {
+  background: rgba(240, 120, 34, 0.1) !important;
+  color: var(--pp-orange) !important;
+  border-left: 2px solid var(--pp-orange) !important;
+}
+
+/* ============================================================
+   AVATARS
+   ============================================================ */
+[class*="Avatar"],
+[class*="avatar"] {
+  background: var(--pp-surface-3) !important;
+  border: 2px solid var(--pp-border-light) !important;
+  color: var(--pp-orange) !important;
+  font-family: var(--pp-mono) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+/* ============================================================
+   PROACTIVE SCAN / SPECIAL AUTHOR BADGES
+   ============================================================ */
+
+/* "Sources", "Warning", "Proactive Scan", "Mock Accounts", "Session Logs" author labels */
+[class*="author"]:has-text("Sources"),
+[class*="author"]:has-text("Proactive Scan"),
+[class*="author"]:has-text("Session Logs") {
+  color: var(--pp-teal) !important;
+}
+
+[class*="author"]:has-text("Warning") {
+  color: var(--pp-yellow) !important;
+}
+
+[class*="author"]:has-text("Mock Accounts") {
+  color: var(--pp-orange) !important;
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+* {
+  scrollbar-width: thin !important;
+  scrollbar-color: var(--pp-surface-3) transparent !important;
+}
+
+*::-webkit-scrollbar { width: 5px; height: 5px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--pp-surface-3);
+  border-radius: 10px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--pp-border-light); }
+
+/* ============================================================
+   DIALOGS / MODALS
+   ============================================================ */
+[class*="Modal"],
+[class*="Dialog"],
+[role="dialog"] {
+  background: var(--pp-surface) !important;
+  border: 1px solid var(--pp-border-light) !important;
+  border-radius: var(--pp-radius-lg) !important;
+  color: var(--pp-text) !important;
+}
+
+[class*="overlay"],
+[class*="Overlay"] {
+  background: rgba(0, 0, 0, 0.7) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+/* ============================================================
+   TOOLTIPS
+   ============================================================ */
+[class*="Tooltip"],
+[role="tooltip"] {
+  background: var(--pp-surface-3) !important;
+  border: 1px solid var(--pp-border-light) !important;
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 12px !important;
+  border-radius: 6px !important;
+}
+
+/* ============================================================
+   WELCOME SCREEN ACTION BUTTONS (role selector)
+   ============================================================ */
+[class*="AskAction"] button,
+[class*="action-list"] button {
+  background: var(--pp-surface-2) !important;
+  border: 1px solid var(--pp-border-light) !important;
+  color: var(--pp-text) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  border-radius: var(--pp-radius) !important;
+  padding: 10px 20px !important;
+  transition: all 0.15s !important;
+}
+
+[class*="AskAction"] button:hover,
+[class*="action-list"] button:hover {
+  background: rgba(240, 120, 34, 0.12) !important;
+  border-color: var(--pp-orange) !important;
+  color: var(--pp-orange) !important;
+}
+
+/* ============================================================
+   FOCUS VISIBLE - ACCESSIBILITY
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--pp-orange) !important;
+  outline-offset: 2px !important;
+}
+
+/* ============================================================
+   "LLMs can make mistakes" FOOTER
+   ============================================================ */
+[class*="footer"],
+[class*="watermark"],
+footer {
+  color: var(--pp-text-faint) !important;
+  font-family: var(--pp-sans) !important;
+  font-size: 11px !important;
+}

@@ -13,7 +13,11 @@ build/
 venv/
 env/
 
-# Data files — added locally, not committed
+# Data files - added locally, not committed
 data/docs/*.pdf
 data/docs/*.xlsx
 data/docs/*.xls
+
+# Generated output
+chunk_dump.txt
+test_results.json

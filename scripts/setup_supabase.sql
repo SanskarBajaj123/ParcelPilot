@@ -1,5 +1,5 @@
 -- ============================================================
--- ParcelPilot AI Agent — Supabase Setup
+-- ParcelPilot AI Agent - Supabase Setup
 -- Run this in: Supabase Dashboard → SQL Editor
 -- ============================================================
 
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     channel                  TEXT,  -- email | chat
     assigned_to              TEXT,
     last_customer_message_at TIMESTAMPTZ,
-    historical_resolution    TEXT,  -- CONTEXT ONLY — may be incorrect
+    historical_resolution    TEXT,  -- CONTEXT ONLY - may be incorrect
     severity                 TEXT   -- P1 | P2 | P3 (computed at ingestion)
 );
 

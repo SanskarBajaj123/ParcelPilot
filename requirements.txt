@@ -3,11 +3,12 @@ langchain-mistralai>=0.2.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain>=0.3.0
+langsmith>=0.1.0
 
 # Supabase (structured data + pgvector)
 supabase>=2.7.0
 
-# HuggingFace (embeddings via Inference API — no local model download)
+# HuggingFace (embeddings via Inference API, no local model download)
 huggingface_hub>=0.24.0
 
 # PDF parsing
@@ -17,8 +18,13 @@ pymupdf>=1.24.0
 openpyxl>=3.1.0
 pandas>=2.2.0
 
-# UI
-chainlit>=1.1.0
+# UI (custom FastAPI server)
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# Legacy Chainlit (kept for reference)
+# chainlit>=1.1.0
 
 # Utilities
 python-dotenv>=1.0.0

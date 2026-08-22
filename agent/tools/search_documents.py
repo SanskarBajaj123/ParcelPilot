@@ -16,7 +16,7 @@ from pathlib import Path as _Path
 load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.parent / ".env").exists() else _Path(__file__).parent.parent.parent / ".env", override=True)
 
 SUPABASE_URL  = os.environ["SUPABASE_URL"]
-SUPABASE_KEY  = os.environ["SUPABASE_ANON_KEY"]
+SUPABASE_KEY  = os.environ["SUPABASE_SERVICE_ROLE_KEY"]   # service role needed for search RPC
 HF_TOKEN      = os.environ["HF_TOKEN"]
 HF_EMBED_URL  = "https://router.huggingface.co/hf-inference/models/BAAI/bge-small-en-v1.5"
 TOP_K         = int(os.getenv("RETRIEVAL_TOP_K", "5"))
@@ -32,7 +32,7 @@ def _embed(text: str) -> list[float]:
                           timeout=30)
         if resp.status_code == 200:
             result = resp.json()
-            # HF returns list of embeddings for batch; single text â†’ first element
+            # HF returns list of embeddings for batch; single text â†' first element
             return result[0] if isinstance(result[0], list) else result
         if resp.status_code == 503:
             time.sleep(15)
@@ -55,7 +55,7 @@ def _detect_conflict(chunks: list[dict]) -> bool:
     for c in chunks:
         if c["authority_level"] > 1:
             overlap = agreement_words & set(c["content"].lower().split())
-            if len(overlap) > 5:   # more than 5 shared content words â†’ likely conflict
+            if len(overlap) > 5:   # more than 5 shared content words â†' likely conflict
                 return True
     return False
 
@@ -90,9 +90,15 @@ def search_documents_fn(query: str, account_scope: str | None = None) -> dict:
 
     conflict = _detect_conflict(chunks)
 
+    def _fmt(filename: str) -> str:
+        import re
+        name = re.sub(r"^[\d]+_", "", filename)
+        name = re.sub(r"\.pdf$", "", name, flags=re.IGNORECASE)
+        return name.replace("_", " ")
+
     sources = [
         {
-            "source_file":     c["source_file"],
+            "source_file":     _fmt(c["source_file"]),
             "authority_level": c["authority_level"],
             "doc_type":        c.get("doc_type", ""),
             "page_num":        c.get("page_num", 0),
