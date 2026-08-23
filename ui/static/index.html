@@ -114,6 +114,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .conflict-warn{background:rgba(136,136,136,.08);border:1px solid rgba(136,136,136,.25);border-radius:var(--r2);padding:8px 12px;font-size:12px;color:var(--am);margin-top:6px}
 .blink{display:inline-block;width:2px;height:14px;background:var(--tx);border-radius:1px;animation:bl .9s infinite;vertical-align:middle;margin-left:2px}
 @keyframes bl{0%,100%{opacity:1}50%{opacity:0}}
+.typing-dots{display:inline-flex;gap:5px;align-items:center;height:18px}
+.typing-dots span{width:7px;height:7px;border-radius:50%;background:var(--txd);display:inline-block;animation:tdot 1.2s ease-in-out infinite}
+.typing-dots span:nth-child(2){animation-delay:.2s}
+.typing-dots span:nth-child(3){animation-delay:.4s}
+@keyframes tdot{0%,80%,100%{transform:scale(.55);opacity:.35}40%{transform:scale(1);opacity:1}}
+#chat-input:disabled{opacity:.5;cursor:not-allowed}
 .proactive-card{background:var(--sur2);border:1px solid var(--bor2);border-radius:var(--r2);padding:12px 14px;margin:4px 0}
 .proactive-card.amber{border-left:3px solid var(--am)}
 .proactive-card.cyan{border-left:3px solid var(--cy)}
@@ -403,6 +409,7 @@ let streaming   = false;
 let streamEl    = null;
 let streamTxtEl = null;
 let streamText  = '';
+let thinkingEl  = null;
 
 const CUSTOMERS = [
   { id:'ACCT-001', pin:'1234',  name:'Northstar Logistics', plan:'Enterprise' },
@@ -710,8 +717,30 @@ function appendConflictWarn() {
   wrap.appendChild(el);
 }
 
+function showThinkingBubble() {
+  const wrap = document.getElementById('msgs');
+  const el   = document.createElement('div');
+  el.className = 'msg bot';
+  el.innerHTML = `
+    <div class="msg-av">🤖</div>
+    <div class="msg-body">
+      <div class="msg-meta">ParcelPilot · ${timeNow()}</div>
+      <div class="msg-bubble" style="padding:14px 18px">
+        <span class="typing-dots"><span></span><span></span><span></span></span>
+      </div>
+    </div>`;
+  wrap.appendChild(el);
+  wrap.scrollTop = wrap.scrollHeight;
+  thinkingEl = el;
+}
+
+function removeThinkingBubble() {
+  if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
+}
+
 function onToken(tok) {
   if (!streaming) {
+    removeThinkingBubble();
     streaming  = true;
     streamText = '';
     const wrap = document.getElementById('msgs');
@@ -757,10 +786,14 @@ function onMessageEnd(sources, conflict) {
 }
 
 function finishStreaming() {
+  removeThinkingBubble();
   streaming   = false;
   streamEl    = null;
   streamTxtEl = null;
   streamText  = '';
+  const input = document.getElementById('chat-input');
+  input.disabled = false;
+  input.focus();
   document.getElementById('send-btn').disabled = false;
   activeToolSteps = {};
 }
@@ -824,7 +857,9 @@ function sendMsg() {
   input.value = '';
   input.style.height = '';
   appendUserMsg(text);
+  input.disabled = true;
   document.getElementById('send-btn').disabled = true;
+  showThinkingBubble();
   wsSend({ type: 'message', content: text });
 }
 
