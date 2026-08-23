@@ -5,9 +5,16 @@ The prompt is templated; user_context fields are injected at session start.
 Everything except Block 2 is static and can be prefix-cached by Mistral.
 """
 
+from datetime import datetime, timezone, timedelta
 from .state import UserContext
 
-SNAPSHOT_TIME = "2026-08-16 16:30 IST (11:00 UTC)"   # from xlsx dataset snapshot
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _now_ist() -> str:
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(_IST)
+    return f"{now_ist.strftime('%Y-%m-%d %H:%M')} IST ({now_utc.strftime('%H:%M')} UTC)"
 
 
 def build_system_prompt(user_context: UserContext) -> str:
@@ -68,7 +75,7 @@ Do NOT attempt to answer out-of-scope questions even partially.
 Do NOT apologise excessively - one brief sentence is enough.
 Do NOT explain what you cannot do in detail - just redirect clearly.
 
-Reference time for all time-based calculations: {SNAPSHOT_TIME}
+Current date and time: {_now_ist()}
 Use this time (not today's actual date) for any elapsed-time or SLA calculations.
 
 TIMEZONE RULE: All timestamps returned by tools are in UTC (suffix +00:00).

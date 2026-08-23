@@ -20,10 +20,7 @@ load_dotenv(_Path(__file__).parent.parent / ".env" if (_Path(__file__).parent.pa
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]   # service role -- bypasses RLS
-SNAPSHOT_ISO = "2026-08-16T11:00:00+00:00"   # 11:00 UTC = 16:30 IST
-
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-SNAPSHOT_DT = datetime.fromisoformat(SNAPSHOT_ISO)
 
 SLA_DEFAULTS = {
     "Enterprise": {"P1": 0.5,  "P2": 2.0,  "P3": 24.0},
@@ -57,9 +54,7 @@ def _elapsed_hours(dt_str: str | None) -> float | None:
     dt = datetime.fromisoformat(dt_str)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    ref = SNAPSHOT_DT
-    if ref.tzinfo is None:
-        ref = ref.replace(tzinfo=timezone.utc)
+    ref = datetime.now(timezone.utc)
     return max(0.0, (ref - dt).total_seconds() / 3600)
 
 
@@ -229,7 +224,7 @@ def detect_issues() -> dict:
 
     # -- Ticket clustering & multi-customer detection --------------------------
     # Include open tickets + recently closed (within CLUSTER_LOOKBACK_DAYS)
-    lookback_cutoff = SNAPSHOT_DT.timestamp() - CLUSTER_LOOKBACK_DAYS * 86400
+    lookback_cutoff = datetime.now(timezone.utc).timestamp() - CLUSTER_LOOKBACK_DAYS * 86400
     all_tickets_raw = sb.table("tickets").select("*").execute().data or []
     cluster_tickets = [
         t for t in all_tickets_raw

@@ -109,9 +109,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .tool-step-name{font-weight:600;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--cy)}
 .tool-step-lat{margin-left:auto;font-size:9px;color:var(--txf);background:var(--sur3);padding:1px 6px;border-radius:10px}
 .tool-step-body{color:var(--txd);font-size:11px;line-height:1.5;word-break:break-all}
-.sources{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
-.src-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:11px;font-family:var(--mono);background:var(--sur2);border:1px solid var(--bor2);color:var(--txd)}
-.conflict-warn{background:rgba(136,136,136,.08);border:1px solid rgba(136,136,136,.25);border-radius:var(--r2);padding:8px 12px;font-size:12px;color:var(--am);margin-top:6px}
 .blink{display:inline-block;width:2px;height:14px;background:var(--tx);border-radius:1px;animation:bl .9s infinite;vertical-align:middle;margin-left:2px}
 @keyframes bl{0%,100%{opacity:1}50%{opacity:0}}
 .typing-dots{display:inline-flex;gap:5px;align-items:center;height:18px}
@@ -479,7 +476,7 @@ function handleServerMsg(msg) {
       updateToolStep(msg.name, msg.latency_ms);
       break;
     case 'message_end':
-      onMessageEnd(msg.sources || [], msg.conflict || false);
+      onMessageEnd();
       break;
     case 'proactive_scan':
       renderProactiveScan(msg.results);
@@ -647,18 +644,15 @@ function renderSidebar() {
 }
 
 // ── Message rendering ──────────────────────────────────────────────────────────
-function appendBotMsg(md, sources, conflict) {
+function appendBotMsg(md) {
   const wrap = document.getElementById('msgs');
   const el   = document.createElement('div');
   el.className = 'msg bot';
-  const srcHtml = sources && sources.length
-    ? `<div class="sources">${sources.map(s => `<span class="src-chip">- ${esc(s.source_file || s)}</span>`).join('')}</div>` : '';
-  const conflictHtml = conflict ? `<div class="conflict-warn">Source conflict detected - higher-authority document takes precedence.</div>` : '';
   el.innerHTML = `
     <div class="msg-av">🤖</div>
     <div class="msg-body">
       <div class="msg-meta">ParcelPilot · ${timeNow()}</div>
-      <div class="msg-bubble">${md2html(md)}${srcHtml}${conflictHtml}</div>
+      <div class="msg-bubble">${md2html(md)}</div>
     </div>`;
   wrap.appendChild(el);
   wrap.scrollTop = wrap.scrollHeight;
@@ -721,13 +715,6 @@ function updateToolStep(name, latMs) {
   }
 }
 
-function appendConflictWarn() {
-  const wrap = document.getElementById('msgs');
-  const el   = document.createElement('div');
-  el.style.paddingLeft = '42px';
-  el.innerHTML = `<div class="conflict-warn">Source conflict detected - applying higher-authority document.</div>`;
-  wrap.appendChild(el);
-}
 
 function showThinkingBubble() {
   const wrap = document.getElementById('msgs');
@@ -773,23 +760,10 @@ function onToken(tok) {
   document.getElementById('msgs').scrollTop = 9999;
 }
 
-function onMessageEnd(sources, conflict) {
+function onMessageEnd() {
   if (streamEl) {
     const blink = streamEl.querySelector('.blink');
     if (blink) blink.remove();
-    const bubble = streamEl.querySelector('.msg-bubble');
-    if (sources && sources.length) {
-      const srcDiv = document.createElement('div');
-      srcDiv.className = 'sources';
-      srcDiv.innerHTML = sources.map(s => `<span class="src-chip">- ${esc(s.source_file || s)}</span>`).join('');
-      bubble.appendChild(srcDiv);
-    }
-    if (conflict) {
-      const warnDiv = document.createElement('div');
-      warnDiv.className = 'conflict-warn';
-      warnDiv.textContent = 'Source conflict - higher-authority document applied.';
-      bubble.appendChild(warnDiv);
-    }
     if (threads.length) {
       threads[0].label = streamText.replace(/\*\*/g,'').substring(0,38) + '...';
       renderSidebar();

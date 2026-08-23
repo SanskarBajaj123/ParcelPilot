@@ -18,10 +18,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 # Service role key: RLS is stateless across REST calls; Python-level filtering
 # below is the authoritative access control layer for this tool.
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-SNAPSHOT_ISO = "2026-08-16T11:00:00+00:00"   # 11:00 UTC = 16:30 IST; reference snapshot
-
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-SNAPSHOT_DT  = datetime.fromisoformat(SNAPSHOT_ISO)
 
 
 def _set_rls_context(role: str, account_id: str = ""):
@@ -30,16 +27,14 @@ def _set_rls_context(role: str, account_id: str = ""):
 
 
 def _elapsed_hours(dt_str: str | None) -> float | None:
-    """Hours elapsed from dt_str to snapshot time. None if dt_str is None."""
+    """Hours elapsed from dt_str to now (UTC). None if dt_str is None."""
     if not dt_str:
         return None
     dt = datetime.fromisoformat(dt_str)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    ref = SNAPSHOT_DT
-    if ref.tzinfo is None:
-        ref = ref.replace(tzinfo=timezone.utc)
-    return max(0.0, (ref - dt).total_seconds() / 3600)
+    now = datetime.now(timezone.utc)
+    return max(0.0, (now - dt).total_seconds() / 3600)
 
 
 @traceable(name="Tool: Structured Data Query", run_type="tool")
