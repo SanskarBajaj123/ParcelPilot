@@ -4,6 +4,15 @@ LangGraph nodes: agent_node, tool_node, confirm_node.
 
 import os
 import json
+import time
+import logging
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
 from langchain_mistralai import ChatMistralAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 
@@ -14,17 +23,46 @@ from .tools.search_documents import search_documents_fn
 from .tools.query_data import query_data_fn
 from .tools.create_action import create_action_fn
 
-MISTRAL_API_KEY      = os.environ["MISTRAL_API_KEY"]
-HISTORY_WINDOW_HOURS = float(os.getenv("HISTORY_WINDOW_HOURS", "1"))
-MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "30"))
+logger = logging.getLogger(__name__)
+
+MISTRAL_API_KEY  = os.environ["MISTRAL_API_KEY"]
+MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "3"))
 
 # ── Mistral LLM ───────────────────────────────────────────────────────────────
 mistral_llm = ChatMistralAI(
     model="mistral-large-latest",
     api_key=MISTRAL_API_KEY,
-    temperature=0.1,     # low temperature for factual support answers
+    temperature=0.1,
     streaming=True,
 )
+
+# ── Rate-limit aware invoke ───────────────────────────────────────────────────
+# Mistral Large 2 rate limits: ~1 req/s on free tier, ~5 req/s on paid.
+# Retry up to 6 times with exponential backoff (2s → 4s → 8s → 16s → 32s → 64s).
+# Catches HTTP 429 (rate limit) and transient 5xx errors from the API.
+
+def _is_rate_limit(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "rate limit" in msg or "too many requests" in msg
+
+def _is_retryable(exc: Exception) -> bool:
+    return _is_rate_limit(exc) or "500" in str(exc) or "503" in str(exc)
+
+@retry(
+    retry=retry_if_exception_type(Exception),
+    stop=stop_after_attempt(6),
+    wait=wait_exponential(multiplier=2, min=2, max=64),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _invoke_llm(llm, messages: list) -> AIMessage:
+    try:
+        return llm.invoke(messages)
+    except Exception as exc:
+        if _is_retryable(exc):
+            logger.warning("Mistral API error (%s) - will retry with backoff", exc)
+            raise   # tenacity catches and retries
+        raise       # non-retryable: propagate immediately
 
 # ── Tool schemas for Mistral function calling ────────────────────────────────
 TOOL_SCHEMAS = [
@@ -108,11 +146,10 @@ def agent_node(state: AgentState) -> dict:
     user_ctx = state["user_context"]
     sys_prompt = build_system_prompt(user_ctx)
 
-    # Time-window history filter
+    # Keep last MAX_HISTORY_TURNS complete turns (3 H + 3 A by default)
     history = filter_history(
         state["messages"],
-        window_hours=HISTORY_WINDOW_HOURS,
-        max_messages=MAX_HISTORY_MESSAGES,
+        max_turns=MAX_HISTORY_TURNS,
     )
 
     # Retrieve relevant docs for the latest human message (if any).
@@ -172,7 +209,7 @@ def agent_node(state: AgentState) -> dict:
     else:
         llm = mistral_llm.bind_tools(TOOL_SCHEMAS)
 
-    response = llm.invoke(messages_for_llm)
+    response = _invoke_llm(llm, messages_for_llm)
     stamped  = stamp(response)
 
     out: dict = {
@@ -224,7 +261,15 @@ def tool_node(state: AgentState) -> dict:
 
             # Format chunks as text for the ToolMessage
             chunks = result.get("chunks", [])
-            content = build_retrieved_context_block(chunks, result["conflict_detected"])
+            if not chunks:
+                content = (
+                    "TOOL_RESULT: NO DOCUMENTS FOUND\n"
+                    "The document search returned no relevant results for this query. "
+                    "Do NOT guess or use prior conversation context to answer. "
+                    "Tell the user that no relevant policy or document information was found."
+                )
+            else:
+                content = build_retrieved_context_block(chunks, result["conflict_detected"])
             tool_msgs.append(stamp(ToolMessage(content=content, tool_call_id=tc_id)))
 
         # ── query_data ───────────────────────────────────────────────────────
@@ -235,7 +280,25 @@ def tool_node(state: AgentState) -> dict:
                 role=role,
                 account_id=account_id,
             )
-            tool_msgs.append(stamp(ToolMessage(content=json.dumps(result, default=str), tool_call_id=tc_id)))
+            # Wrap empty/error results with an explicit anti-hallucination directive
+            # so the LLM does not invent data from prior context.
+            is_empty = (
+                "error" in result
+                or result.get("result") == "NO_DATA"
+                or (isinstance(result.get("tickets"), list) and len(result["tickets"]) == 0)
+                or (isinstance(result.get("orders"), list) and len(result["orders"]) == 0)
+            )
+            if is_empty:
+                content = (
+                    "TOOL_RESULT: NO DATA FOUND\n"
+                    "The database returned no records for this query. "
+                    "Do NOT infer, guess, or use any previous conversation context to fill in missing data. "
+                    "Tell the user exactly what was searched and that no data is available.\n\n"
+                    f"Raw result: {json.dumps(result, default=str)}"
+                )
+            else:
+                content = json.dumps(result, default=str)
+            tool_msgs.append(stamp(ToolMessage(content=content, tool_call_id=tc_id)))
 
         # ── create_action ────────────────────────────────────────────────────
         elif name == "create_action":
