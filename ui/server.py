@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from supabase import create_client
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 _env = Path(__file__).parent.parent / ".env"
 load_dotenv(_env if _env.exists() else _env.parent.parent / ".env", override=True)
@@ -24,6 +24,7 @@ load_dotenv(_env if _env.exists() else _env.parent.parent / ".env", override=Tru
 from agent.graph import graph
 from agent.state import AgentState, UserContext, make_initial_state
 from agent.history import stamp
+from agent.tools.create_action import create_action_fn
 from proactive.detector import detect_issues
 
 log = logging.getLogger("parcelpilot.server")
@@ -192,13 +193,12 @@ async def ws_endpoint(websocket: WebSocket):
             elif t == "confirm":
                 if not session["auth_verified"]:
                     continue
-                reply = "yes" if msg.get("value") else "no"
-                confirm_content = f"[USER_CONFIRMATION: {reply}]"
+                confirmed = bool(msg.get("value"))
                 session["log"].append({
                     "time": _ts(), "type": "USER_MSG",
-                    "detail": f"Confirmation: {reply}",
+                    "detail": f"Confirmation button: {'YES' if confirmed else 'NO'}",
                 })
-                asyncio.create_task(_handle_chat(websocket, session, confirm_content))
+                asyncio.create_task(_handle_confirm(websocket, session, confirmed))
 
             # ── Get session logs ───────────────────────────────────────────
             elif t == "get_logs":
@@ -231,6 +231,83 @@ async def _run_scan(ws: WebSocket, session: dict) -> None:
                     results={"error": str(e)}, latency_ms=0)
 
 
+CONFIRM_TIMEOUT_SECS = 300   # 5 minutes
+
+
+async def _handle_confirm(ws: WebSocket, session: dict, confirmed: bool) -> None:
+    """
+    Handle Yes/No button clicks directly - bypasses LangGraph entirely.
+    Creates or cancels the pending action and streams a response.
+    """
+    cs = session["state"].get("confirmation_state", "IDLE")
+    pa = session["state"].get("pending_action")
+    pa_at = session.get("pending_action_at", 0)
+
+    # Reset confirmation state unconditionally so it doesn't linger
+    session["state"]["confirmation_state"] = "IDLE"
+    session["state"]["pending_action"] = None
+    session.pop("pending_action_at", None)
+
+    if cs != "PENDING_CONFIRMATION" or not pa:
+        await _send(ws, type="token",
+                    content="No action is currently pending. Please make a new request.")
+        await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
+        return
+
+    # 5-minute expiry
+    if time.time() - pa_at > CONFIRM_TIMEOUT_SECS:
+        await _send(ws, type="token",
+                    content="The pending action has expired (5-minute limit). Please request the action again.")
+        await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
+        session["log"].append({"time": _ts(), "type": "ACTION_EXPIRED", "detail": pa.get("action_type", "?")})
+        return
+
+    if not confirmed:
+        await _send(ws, type="token",
+                    content="Action cancelled. Let me know if there's anything else I can help with.")
+        await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
+        session["log"].append({"time": _ts(), "type": "ACTION_CANCELLED", "detail": pa.get("action_type", "?")})
+        # Append cancel exchange to history so context is preserved
+        session["state"]["messages"].append(stamp(AIMessage(
+            content="Action cancelled. Let me know if there's anything else I can help with."
+        )))
+        return
+
+    # Execute the action
+    user_ctx = session["state"]["user_context"]
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: create_action_fn(
+                action_type=pa["action_type"],
+                payload=pa["payload"],
+                execute=True,
+                actor_name=user_ctx.get("name", "unknown"),
+                actor_role=user_ctx["role"],
+            )
+        )
+        summary    = result.get("summary", "Action completed.")
+        action_id  = result.get("action_id", "N/A")
+        ts_str     = result.get("timestamp", "")
+        reply_text = f"Done. {summary}\n\nAction ID: **{action_id}**"
+        if ts_str:
+            reply_text += f"  |  {ts_str}"
+
+        await _send(ws, type="token", content=reply_text)
+        session["log"].append({
+            "time": _ts(), "type": "ACTION_EXECUTED",
+            "detail": f"{pa['action_type']} | {action_id}",
+        })
+        session["state"]["messages"].append(stamp(AIMessage(content=reply_text)))
+    except Exception as e:
+        log.exception("Action execution error")
+        err_text = f"Failed to execute action: {e}"
+        await _send(ws, type="token", content=err_text)
+        session["state"]["messages"].append(stamp(AIMessage(content=err_text)))
+
+    await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
+
+
 async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
     """Stream LangGraph agent response over WebSocket."""
     state: AgentState = session["state"]
@@ -244,6 +321,9 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
     captured_conflict   = False
     tool_start_times: dict[str, float] = {}
     llm_start: float | None            = None
+    # Fallback: track create_action(execute=False) calls from LLM tool-call events
+    # so we can set pending_action even if on_chain_end doesn't carry it.
+    _pending_tc_args: dict | None      = None
 
     try:
         async for event in graph.astream_events(state, version="v2"):
@@ -275,6 +355,12 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
                         "detail": detail, "latency_ms": lat,
                     })
                     llm_start = None
+                    # Detect create_action(execute=False) for fallback pending_action capture
+                    for tc in (getattr(resp, "tool_calls", None) or []):
+                        if tc.get("name") == "create_action":
+                            args = tc.get("args") or {}
+                            if not args.get("execute", True):
+                                _pending_tc_args = args
 
             elif kind == "on_tool_start":
                 run_id = event.get("run_id", name)
@@ -300,6 +386,7 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
                             latency_ms=lat, preview=preview)
 
             elif kind == "on_chain_end":
+                log.info("on_chain_end name=%r keys=%r", name, list(data.get("output", {}).keys()) if isinstance(data.get("output"), dict) else type(data.get("output")).__name__)
                 out = data.get("output", {})
                 if isinstance(out, dict):
                     srcs = out.get("sources_used") or []
@@ -320,6 +407,34 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
             "time": _ts(), "type": "AGENT_REPLY",
             "detail": (final_text[:80] + "...") if final_text else "(empty)",
         })
+
+        # Fallback: if on_chain_end didn't capture confirmation_state but the LLM made a
+        # create_action(execute=False) call, derive pending_action directly from the tool args.
+        if session["state"]["confirmation_state"] != "PENDING_CONFIRMATION" and _pending_tc_args:
+            try:
+                user_ctx = session["state"]["user_context"]
+                draft = create_action_fn(
+                    action_type=_pending_tc_args.get("action_type", ""),
+                    payload=_pending_tc_args.get("payload", {}),
+                    execute=False,
+                    actor_name=user_ctx.get("name", "unknown"),
+                    actor_role=user_ctx["role"],
+                )
+                if draft.get("draft"):
+                    session["state"]["confirmation_state"] = "PENDING_CONFIRMATION"
+                    session["state"]["pending_action"] = {
+                        "action_type": draft["action_type"],
+                        "payload":     draft["payload"],
+                        "summary":     draft["summary"],
+                    }
+                    log.info("Fallback: set confirmation_state=PENDING_CONFIRMATION from tool args")
+            except Exception:
+                log.exception("Fallback pending_action derivation failed")
+
+        # Record when the pending action was created so we can expire it after 5 min
+        if session["state"]["confirmation_state"] == "PENDING_CONFIRMATION":
+            session.setdefault("pending_action_at", time.time())
+
         # Deduplicate sources by source_file, keep max 5
         seen: set[str] = set()
         deduped: list = []
