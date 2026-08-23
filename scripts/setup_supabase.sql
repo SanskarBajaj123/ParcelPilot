@@ -176,7 +176,25 @@ $$;
 
 
 -- ============================================================
--- 7. ACTIONS LOG (state-changing action audit trail)
+-- 7. CONVERSATION MESSAGES (persistent chat history per session)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id          UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+    session_id  TEXT        NOT NULL,
+    user_id     TEXT        NOT NULL,   -- account_id for customers, username for staff
+    role        TEXT        NOT NULL CHECK (role IN ('user', 'assistant')),
+    content     TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Fast lookup: last N messages for a session ordered by time
+CREATE INDEX IF NOT EXISTS idx_conv_messages_session_time
+    ON conversation_messages (session_id, created_at DESC);
+
+
+-- ============================================================
+-- 8. ACTIONS LOG (state-changing action audit trail)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS actions_log (

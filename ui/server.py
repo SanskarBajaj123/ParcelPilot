@@ -6,7 +6,7 @@ Replaces Chainlit entirely. Run:
   (from inside parcelpilot-agent/)
 """
 
-import os, time, hashlib, asyncio, json, logging
+import os, time, uuid, hashlib, asyncio, json, logging
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
@@ -24,7 +24,6 @@ load_dotenv(_env if _env.exists() else _env.parent.parent / ".env", override=Tru
 from agent.graph import graph
 from agent.state import AgentState, UserContext, make_initial_state
 from agent.history import stamp
-from agent.tools.create_action import create_action_fn
 from proactive.detector import detect_issues
 
 log = logging.getLogger("parcelpilot.server")
@@ -80,6 +79,67 @@ async def _send(ws: WebSocket, **kwargs) -> None:
     except Exception:
         pass
 
+
+# ── Conversation history (Supabase) ─────────────────────────────────────────
+
+async def _save_message(session_id: str, user_id: str, role: str, content: str) -> None:
+    """Persist a user or assistant message to the conversation_messages table."""
+    try:
+        def _insert():
+            sb_svc.table("conversation_messages").insert({
+                "session_id": session_id,
+                "user_id":    user_id,
+                "role":       role,
+                "content":    content,
+            }).execute()
+        await asyncio.get_event_loop().run_in_executor(None, _insert)
+    except Exception:
+        log.exception("Failed to save message to DB")
+
+
+async def _get_history_messages(session_id: str) -> list:
+    """
+    Fetch the last 3 user messages and last 3 assistant messages for this session,
+    sorted chronologically, and return them as LangChain HumanMessage/AIMessage objects.
+    """
+    try:
+        def _fetch():
+            user_rows = (
+                sb_svc.table("conversation_messages")
+                .select("role,content,created_at")
+                .eq("session_id", session_id)
+                .eq("role", "user")
+                .order("created_at", desc=True)
+                .limit(3)
+                .execute().data
+            )
+            asst_rows = (
+                sb_svc.table("conversation_messages")
+                .select("role,content,created_at")
+                .eq("session_id", session_id)
+                .eq("role", "assistant")
+                .order("created_at", desc=True)
+                .limit(3)
+                .execute().data
+            )
+            return user_rows, asst_rows
+
+        user_rows, asst_rows = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+        all_rows = user_rows + asst_rows
+        all_rows.sort(key=lambda r: r["created_at"])
+
+        msgs = []
+        for row in all_rows:
+            if row["role"] == "user":
+                msgs.append(HumanMessage(content=row["content"]))
+            else:
+                msgs.append(AIMessage(content=row["content"]))
+        return msgs
+    except Exception:
+        log.exception("Failed to fetch history from DB")
+        return []
+
+
 # ── WebSocket ────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
@@ -88,9 +148,10 @@ async def ws_endpoint(websocket: WebSocket):
     session: dict[str, Any] = {
         "auth_verified": False,
         "auth_attempts": 0,
-        "user_context": None,
-        "state": None,
-        "log": [],
+        "user_context":  None,
+        "session_id":    None,   # UUID generated at auth time
+        "user_id":       None,   # account_id for customers, username for staff
+        "log":           [],
     }
 
     try:
@@ -132,8 +193,12 @@ async def ws_endpoint(websocket: WebSocket):
                     "role":         "customer",
                     "name":         acct["account_name"],
                 }
-                session.update(auth_verified=True, user_context=ctx,
-                               state=make_initial_state(ctx))
+                session.update(
+                    auth_verified=True,
+                    user_context=ctx,
+                    session_id=str(uuid.uuid4()),
+                    user_id=acct["account_id"],
+                )
                 session["log"].append({
                     "time": _ts(), "type": "AUTH",
                     "detail": f"CUSTOMER_OK | {acct['account_id']} - {acct['account_name']}",
@@ -141,7 +206,7 @@ async def ws_endpoint(websocket: WebSocket):
                 await _send(websocket, type="auth_ok", role="customer",
                             account_id=acct["account_id"],
                             name=acct["account_name"],
-                            plan=acct.get("plan",""))
+                            plan=acct.get("plan", ""))
 
             # ── Staff auth ─────────────────────────────────────────────────
             elif t == "auth_staff":
@@ -165,14 +230,17 @@ async def ws_endpoint(websocket: WebSocket):
                     "role":         "internal",
                     "name":         name,
                 }
-                session.update(auth_verified=True, user_context=ctx,
-                               state=make_initial_state(ctx))
+                session.update(
+                    auth_verified=True,
+                    user_context=ctx,
+                    session_id=str(uuid.uuid4()),
+                    user_id=username,
+                )
                 session["log"].append({
                     "time": _ts(), "type": "AUTH",
                     "detail": f"STAFF_OK | {username} ({name})",
                 })
                 await _send(websocket, type="auth_ok", role="internal", name=name)
-                # Fire proactive scan in background
                 asyncio.create_task(_run_scan(websocket, session))
 
             # ── Chat message ───────────────────────────────────────────────
@@ -188,17 +256,6 @@ async def ws_endpoint(websocket: WebSocket):
                     "detail": content[:120],
                 })
                 asyncio.create_task(_handle_chat(websocket, session, content))
-
-            # ── Confirmation response ──────────────────────────────────────
-            elif t == "confirm":
-                if not session["auth_verified"]:
-                    continue
-                confirmed = bool(msg.get("value"))
-                session["log"].append({
-                    "time": _ts(), "type": "USER_MSG",
-                    "detail": f"Confirmation button: {'YES' if confirmed else 'NO'}",
-                })
-                asyncio.create_task(_handle_confirm(websocket, session, confirmed))
 
             # ── Get session logs ───────────────────────────────────────────
             elif t == "get_logs":
@@ -227,103 +284,27 @@ async def _run_scan(ws: WebSocket, session: dict) -> None:
         await _send(ws, type="proactive_scan", results=results, latency_ms=lat)
     except Exception as e:
         log.exception("Proactive scan failed")
-        await _send(ws, type="proactive_scan",
-                    results={"error": str(e)}, latency_ms=0)
-
-
-CONFIRM_TIMEOUT_SECS = 300   # 5 minutes
-
-
-async def _handle_confirm(ws: WebSocket, session: dict, confirmed: bool) -> None:
-    """
-    Handle Yes/No button clicks directly - bypasses LangGraph entirely.
-    Creates or cancels the pending action and streams a response.
-    """
-    cs = session["state"].get("confirmation_state", "IDLE")
-    pa = session["state"].get("pending_action")
-    pa_at = session.get("pending_action_at", 0)
-
-    # Reset confirmation state unconditionally so it doesn't linger
-    session["state"]["confirmation_state"] = "IDLE"
-    session["state"]["pending_action"] = None
-    session.pop("pending_action_at", None)
-
-    if cs != "PENDING_CONFIRMATION" or not pa:
-        await _send(ws, type="token",
-                    content="No action is currently pending. Please make a new request.")
-        await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
-        return
-
-    # 5-minute expiry
-    if time.time() - pa_at > CONFIRM_TIMEOUT_SECS:
-        await _send(ws, type="token",
-                    content="The pending action has expired (5-minute limit). Please request the action again.")
-        await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
-        session["log"].append({"time": _ts(), "type": "ACTION_EXPIRED", "detail": pa.get("action_type", "?")})
-        return
-
-    if not confirmed:
-        await _send(ws, type="token",
-                    content="Action cancelled. Let me know if there's anything else I can help with.")
-        await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
-        session["log"].append({"time": _ts(), "type": "ACTION_CANCELLED", "detail": pa.get("action_type", "?")})
-        # Append cancel exchange to history so context is preserved
-        session["state"]["messages"].append(stamp(AIMessage(
-            content="Action cancelled. Let me know if there's anything else I can help with."
-        )))
-        return
-
-    # Execute the action
-    user_ctx = session["state"]["user_context"]
-    try:
-        result = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: create_action_fn(
-                action_type=pa["action_type"],
-                payload=pa["payload"],
-                execute=True,
-                actor_name=user_ctx.get("name", "unknown"),
-                actor_role=user_ctx["role"],
-            )
-        )
-        summary    = result.get("summary", "Action completed.")
-        action_id  = result.get("action_id", "N/A")
-        ts_str     = result.get("timestamp", "")
-        reply_text = f"Done. {summary}\n\nAction ID: **{action_id}**"
-        if ts_str:
-            reply_text += f"  |  {ts_str}"
-
-        await _send(ws, type="token", content=reply_text)
-        session["log"].append({
-            "time": _ts(), "type": "ACTION_EXECUTED",
-            "detail": f"{pa['action_type']} | {action_id}",
-        })
-        session["state"]["messages"].append(stamp(AIMessage(content=reply_text)))
-    except Exception as e:
-        log.exception("Action execution error")
-        err_text = f"Failed to execute action: {e}"
-        await _send(ws, type="token", content=err_text)
-        session["state"]["messages"].append(stamp(AIMessage(content=err_text)))
-
-    await _send(ws, type="message_end", sources=[], conflict=False, requires_confirm=False)
+        await _send(ws, type="proactive_scan", results={"error": str(e)}, latency_ms=0)
 
 
 async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
-    """Stream LangGraph agent response over WebSocket."""
-    state: AgentState = session["state"]
+    """Save user message, fetch DB history, stream LangGraph response, save reply."""
 
-    human = stamp(HumanMessage(content=content))
-    state["messages"].append(human)
-    state["message_timestamps"].append(time.time())
+    # 1. Persist the user message
+    await _save_message(session["session_id"], session["user_id"], "user", content)
 
-    final_text          = ""
-    captured_sources    = []
-    captured_conflict   = False
+    # 2. Fetch conversation history (last 3 user + 3 assistant, sorted by time)
+    history_msgs = await _get_history_messages(session["session_id"])
+
+    # 3. Build fresh AgentState - history already includes the current user message
+    state = make_initial_state(session["user_context"])
+    state["messages"] = list(history_msgs)
+
+    final_text        = ""
+    captured_sources  = []
+    captured_conflict = False
     tool_start_times: dict[str, float] = {}
-    llm_start: float | None            = None
-    # Fallback: track create_action(execute=False) calls from LLM tool-call events
-    # so we can set pending_action even if on_chain_end doesn't carry it.
-    _pending_tc_args: dict | None      = None
+    llm_start: float | None = None
 
     try:
         async for event in graph.astream_events(state, version="v2"):
@@ -344,23 +325,18 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
 
             elif kind == "on_chat_model_end":
                 if llm_start is not None:
-                    lat = int((time.time() - llm_start) * 1000)
+                    lat  = int((time.time() - llm_start) * 1000)
                     resp = data.get("output")
-                    n_tc = len(getattr(resp, "tool_calls", None) or [])
+                    tcs  = getattr(resp, "tool_calls", None) or []
                     detail = f"LLM: {len(final_text)} chars"
-                    if n_tc:
-                        detail += f", {n_tc} tool call(s)"
+                    if tcs:
+                        tc_names = [tc.get("name", "?") for tc in tcs]
+                        detail += f" | tools: {', '.join(tc_names)}"
                     session["log"].append({
                         "time": _ts(), "type": "LLM_CALL",
                         "detail": detail, "latency_ms": lat,
                     })
                     llm_start = None
-                    # Detect create_action(execute=False) for fallback pending_action capture
-                    for tc in (getattr(resp, "tool_calls", None) or []):
-                        if tc.get("name") == "create_action":
-                            args = tc.get("args") or {}
-                            if not args.get("execute", True):
-                                _pending_tc_args = args
 
             elif kind == "on_tool_start":
                 run_id = event.get("run_id", name)
@@ -382,11 +358,9 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
                     "time": _ts(), "type": "TOOL_END",
                     "detail": f"{name}: done", "latency_ms": lat,
                 })
-                await _send(ws, type="tool_end", name=name,
-                            latency_ms=lat, preview=preview)
+                await _send(ws, type="tool_end", name=name, latency_ms=lat, preview=preview)
 
             elif kind == "on_chain_end":
-                log.info("on_chain_end name=%r keys=%r", name, list(data.get("output", {}).keys()) if isinstance(data.get("output"), dict) else type(data.get("output")).__name__)
                 out = data.get("output", {})
                 if isinstance(out, dict):
                     srcs = out.get("sources_used") or []
@@ -394,46 +368,15 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
                         captured_sources = srcs
                     if out.get("conflict_detected"):
                         captured_conflict = True
-                    # Write back state fields that must persist between turns
-                    if "confirmation_state" in out:
-                        session["state"]["confirmation_state"] = out["confirmation_state"]
-                    if "pending_action" in out:
-                        session["state"]["pending_action"] = out["pending_action"]
-                    # Graph root event has the full final messages list
-                    if "messages" in out and name not in ("agent_node", "tool_node", "confirm_node"):
-                        session["state"]["messages"] = list(out["messages"])
 
         session["log"].append({
             "time": _ts(), "type": "AGENT_REPLY",
             "detail": (final_text[:80] + "...") if final_text else "(empty)",
         })
 
-        # Fallback: if on_chain_end didn't capture confirmation_state but the LLM made a
-        # create_action(execute=False) call, derive pending_action directly from the tool args.
-        if session["state"]["confirmation_state"] != "PENDING_CONFIRMATION" and _pending_tc_args:
-            try:
-                user_ctx = session["state"]["user_context"]
-                draft = create_action_fn(
-                    action_type=_pending_tc_args.get("action_type", ""),
-                    payload=_pending_tc_args.get("payload", {}),
-                    execute=False,
-                    actor_name=user_ctx.get("name", "unknown"),
-                    actor_role=user_ctx["role"],
-                )
-                if draft.get("draft"):
-                    session["state"]["confirmation_state"] = "PENDING_CONFIRMATION"
-                    session["state"]["pending_action"] = {
-                        "action_type": draft["action_type"],
-                        "payload":     draft["payload"],
-                        "summary":     draft["summary"],
-                    }
-                    log.info("Fallback: set confirmation_state=PENDING_CONFIRMATION from tool args")
-            except Exception:
-                log.exception("Fallback pending_action derivation failed")
-
-        # Record when the pending action was created so we can expire it after 5 min
-        if session["state"]["confirmation_state"] == "PENDING_CONFIRMATION":
-            session.setdefault("pending_action_at", time.time())
+        # 4. Persist the assistant reply
+        if final_text:
+            await _save_message(session["session_id"], session["user_id"], "assistant", final_text)
 
         # Deduplicate sources by source_file, keep max 5
         seen: set[str] = set()
@@ -443,11 +386,10 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
             if key not in seen:
                 seen.add(key)
                 deduped.append(src)
-        requires_confirm = session["state"]["confirmation_state"] == "PENDING_CONFIRMATION"
+
         await _send(ws, type="message_end",
                     sources=deduped[:5],
-                    conflict=captured_conflict,
-                    requires_confirm=requires_confirm)
+                    conflict=captured_conflict)
 
     except Exception as e:
         log.exception("Chat handler error")

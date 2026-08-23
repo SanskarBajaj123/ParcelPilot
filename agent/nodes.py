@@ -1,5 +1,5 @@
-﻿"""
-LangGraph nodes: agent_node, tool_node, confirm_node.
+"""
+LangGraph nodes: agent_node, tool_node.
 """
 
 import os
@@ -26,7 +26,7 @@ from .tools.create_action import create_action_fn
 
 logger = logging.getLogger(__name__)
 
-MISTRAL_API_KEY  = os.environ["MISTRAL_API_KEY"]
+MISTRAL_API_KEY   = os.environ["MISTRAL_API_KEY"]
 MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "3"))
 
 # ── Mistral LLM ───────────────────────────────────────────────────────────────
@@ -38,10 +38,6 @@ mistral_llm = ChatMistralAI(
 )
 
 # ── Rate-limit aware invoke ───────────────────────────────────────────────────
-# Mistral Large 2 rate limits: ~1 req/s on free tier, ~5 req/s on paid.
-# Retry up to 6 times with exponential backoff (2s → 4s → 8s → 16s → 32s → 64s).
-# Catches HTTP 429 (rate limit) and transient 5xx errors from the API.
-
 def _is_rate_limit(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "429" in msg or "rate limit" in msg or "too many requests" in msg
@@ -63,8 +59,8 @@ def _invoke_llm(llm, messages: list) -> AIMessage:
     except Exception as exc:
         if _is_retryable(exc):
             logger.warning("Mistral API error (%s) - will retry with backoff", exc)
-            raise   # tenacity catches and retries
-        raise       # non-retryable: propagate immediately
+            raise
+        raise
 
 @traceable(name="Preemptive: Document Search", run_type="retriever")
 def _preemptive_search(query: str, account_scope: str | None) -> dict:
@@ -148,25 +144,23 @@ def agent_node(state: AgentState) -> dict:
     Main LLM call. Assembles:
       1. System prompt (with user context)
       2. Retrieved context block (fresh search this turn, if a user message is latest)
-      3. Time-filtered conversation history
-    Binds tool schemas unless in PENDING_CONFIRMATION state.
+      3. Conversation history (from DB, injected via state["messages"])
     """
-    user_ctx = state["user_context"]
+    user_ctx   = state["user_context"]
     sys_prompt = build_system_prompt(user_ctx)
 
-    # Keep last MAX_HISTORY_TURNS complete turns (3 H + 3 A by default)
+    # Keep last MAX_HISTORY_TURNS complete turns from the injected history
     history = filter_history(
         state["messages"],
         max_turns=MAX_HISTORY_TURNS,
     )
 
     # Retrieve relevant docs for the latest human message (if any).
-    # Skip on the second agent call (after tool_node ran) - tool results are already
-    # in the message history, and sources_used was set by tool_node.
+    # Skip on the second agent call (after tool_node ran) - tool results are already in history.
     retrieved_ctx_block = ""
     preemptive_sources  = []
     preemptive_conflict = False
-    last_msg = state["messages"][-1] if state["messages"] else None
+    last_msg      = state["messages"][-1] if state["messages"] else None
     is_after_tools = isinstance(last_msg, ToolMessage)
 
     if not is_after_tools:
@@ -179,12 +173,9 @@ def agent_node(state: AgentState) -> dict:
             account_name  = user_ctx.get("account_name", "")
             raw_query     = latest_human.content if isinstance(latest_human.content, str) else str(latest_human.content)
 
-            # For customers, append their account name to bias retrieval toward their agreement doc
             enhanced_query = f"{raw_query} {account_name} agreement" if (role == "customer" and account_name) else raw_query
+            search_result  = _preemptive_search(query=enhanced_query, account_scope=account_scope)
 
-            search_result = _preemptive_search(query=enhanced_query, account_scope=account_scope)
-
-            # Fallback: if no customer-agreement chunk surfaced, do a targeted agreement search
             if role == "customer" and account_name and not any(c["authority_level"] == 1 for c in search_result["chunks"]):
                 targeted = _preemptive_search(
                     query=f"{account_name} service agreement SLA priority response time credit cancellation",
@@ -205,18 +196,12 @@ def agent_node(state: AgentState) -> dict:
             preemptive_sources  = search_result.get("sources", [])
             preemptive_conflict = search_result["conflict_detected"]
 
-    # Build message list for LLM
     messages_for_llm = [SystemMessage(content=sys_prompt)]
     if retrieved_ctx_block:
         messages_for_llm.append(SystemMessage(content=retrieved_ctx_block))
     messages_for_llm.extend(history)
 
-    # Disable tool calls while waiting for confirmation
-    if state["confirmation_state"] == "PENDING_CONFIRMATION":
-        llm = mistral_llm   # no tools bound
-    else:
-        llm = mistral_llm.bind_tools(TOOL_SCHEMAS)
-
+    llm      = mistral_llm.bind_tools(TOOL_SCHEMAS)
     response = _invoke_llm(llm, messages_for_llm)
     stamped  = stamp(response)
 
@@ -225,10 +210,8 @@ def agent_node(state: AgentState) -> dict:
         "tool_calls_this_turn": [tc["name"] for tc in (response.tool_calls or [])],
     }
     if not is_after_tools:
-        # First call: emit pre-emptive search sources (may be overwritten by tool_node)
         out["sources_used"]      = preemptive_sources
         out["conflict_detected"] = preemptive_conflict
-    # Second call (after tools): leave sources_used alone - tool_node already set it
     return out
 
 
@@ -240,22 +223,20 @@ def tool_node(state: AgentState) -> dict:
     Dispatches tool calls from the latest AIMessage.
     Injects user_context into every tool call -- model cannot override access control.
     """
-    user_ctx    = state["user_context"]
-    role        = user_ctx["role"]
-    account_id  = user_ctx.get("account_id") or ""
-    actor_name  = user_ctx.get("name", "unknown")
+    user_ctx   = state["user_context"]
+    role       = user_ctx["role"]
+    account_id = user_ctx.get("account_id") or ""
+    actor_name = user_ctx.get("name", "unknown")
 
-    last_ai     = state["messages"][-1]
-    tool_msgs   = []
-    all_sources = []
-    conflict    = False
-
-    pending_confirmation = None   # set if create_action(execute=False) is called
+    last_ai   = state["messages"][-1]
+    tool_msgs = []
+    all_sources: list = []
+    conflict = False
 
     for tc in (last_ai.tool_calls or []):
-        name   = tc["name"]
-        args   = tc["args"] if isinstance(tc["args"], dict) else json.loads(tc["args"])
-        tc_id  = tc["id"]
+        name  = tc["name"]
+        args  = tc["args"] if isinstance(tc["args"], dict) else json.loads(tc["args"])
+        tc_id = tc["id"]
 
         # ── search_documents ─────────────────────────────────────────────────
         if name == "search_documents":
@@ -268,7 +249,6 @@ def tool_node(state: AgentState) -> dict:
             if result.get("conflict_detected"):
                 conflict = True
 
-            # Format chunks as text for the ToolMessage
             chunks = result.get("chunks", [])
             if not chunks:
                 content = (
@@ -289,8 +269,6 @@ def tool_node(state: AgentState) -> dict:
                 role=role,
                 account_id=account_id,
             )
-            # Wrap empty/error results with an explicit anti-hallucination directive
-            # so the LLM does not invent data from prior context.
             is_empty = (
                 "error" in result
                 or result.get("result") == "NO_DATA"
@@ -313,14 +291,6 @@ def tool_node(state: AgentState) -> dict:
         elif name == "create_action":
             execute = args.get("execute", False)
 
-            # Safety: if somehow execute=True without PENDING_CONFIRMATION, block it
-            if execute and state["confirmation_state"] != "PENDING_CONFIRMATION":
-                tool_msgs.append(stamp(ToolMessage(
-                    content='{"error": "Cannot execute action without pending confirmation. Call create_action with execute=false first to prepare a draft."}',
-                    tool_call_id=tc_id,
-                )))
-                continue
-
             result = create_action_fn(
                 action_type=args.get("action_type", ""),
                 payload=args.get("payload", {}),
@@ -328,19 +298,10 @@ def tool_node(state: AgentState) -> dict:
                 actor_name=actor_name,
                 actor_role=role,
             )
-
-            if result.get("draft"):
-                # Store pending -- don't return early, so remaining tool calls
-                # still get their ToolMessages (avoids Mistral mismatch error)
-                pending_confirmation = {
-                    "action_type": result["action_type"],
-                    "payload":     result["payload"],
-                    "summary":     result["summary"],
-                }
-                tool_msgs.append(stamp(ToolMessage(content=result["summary"], tool_call_id=tc_id)))
-                continue
-
-            tool_msgs.append(stamp(ToolMessage(content=json.dumps(result), tool_call_id=tc_id)))
+            tool_msgs.append(stamp(ToolMessage(
+                content=result.get("summary", json.dumps(result)),
+                tool_call_id=tc_id,
+            )))
 
         else:
             tool_msgs.append(stamp(ToolMessage(
@@ -348,68 +309,8 @@ def tool_node(state: AgentState) -> dict:
                 tool_call_id=tc_id,
             )))
 
-    out: dict = {
+    return {
         "messages":          tool_msgs,
         "sources_used":      all_sources,
         "conflict_detected": conflict,
     }
-    if pending_confirmation:
-        out["confirmation_state"] = "PENDING_CONFIRMATION"
-        out["pending_action"]     = pending_confirmation
-    return out
-
-
-# ── confirm_node ──────────────────────────────────────────────────────────────
-
-@traceable(name="Confirm: Action Gate", run_type="chain")
-def confirm_node(state: AgentState) -> dict:
-    """
-    Handles the user's yes/no response to a pending action.
-    Called when confirmation_state == PENDING_CONFIRMATION and a new HumanMessage arrives.
-    """
-    user_ctx   = state["user_context"]
-    pending    = state["pending_action"]
-    last_human = next(
-        (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), None
-    )
-
-    if not last_human or not pending:
-        return {}
-
-    user_reply = last_human.content.strip().lower() if isinstance(last_human.content, str) else ""
-    confirmed  = any(w in user_reply for w in ["yes", "confirm", "go ahead", "proceed", "ok", "sure", "yeah", "yep"])
-    cancelled  = any(w in user_reply for w in ["no", "cancel", "stop", "don't", "dont", "nope", "abort"])
-
-    if confirmed:
-        result = create_action_fn(
-            action_type=pending["action_type"],
-            payload=pending["payload"],
-            execute=True,
-            actor_name=user_ctx.get("name", "unknown"),
-            actor_role=user_ctx["role"],
-        )
-        reply = AIMessage(content=f"Done. Action completed.\n\n{result.get('summary', '')}\nAction ID: {result.get('action_id', 'N/A')}")
-        return {
-            "messages":           [stamp(reply)],
-            "confirmation_state": "IDLE",
-            "pending_action":     None,
-        }
-
-    elif cancelled:
-        reply = AIMessage(content="Understood -- action cancelled. Let me know if you'd like to do something else.")
-        return {
-            "messages":           [stamp(reply)],
-            "confirmation_state": "IDLE",
-            "pending_action":     None,
-        }
-
-    else:
-        # Ambiguous -- re-ask
-        reply = AIMessage(
-            content=(
-                f"I need a clear yes or no to proceed.\n\n"
-                f"**Pending action:**\n{pending['summary']}\n\n"
-                "Reply **yes** to confirm or **no** to cancel."
-            )
-        )
-        return {"messages": [stamp(reply)]}
