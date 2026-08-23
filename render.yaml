@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: parcelpilot-agent
+    runtime: python
+    region: singapore
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python ui/server.py
+    autoDeploy: true
+    envVars:
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: LANGSMITH_TRACING
+        value: "true"
+      - key: LANGSMITH_ENDPOINT
+        value: https://api.smith.langchain.com
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_PROJECT
+        value: parcelpilot-agent
+      - key: MAX_HISTORY_TURNS
+        value: "3"
+      - key: RETRIEVAL_TOP_K
+        value: "5"
+      - key: LOG_LEVEL
+        value: INFO
