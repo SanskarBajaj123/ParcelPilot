@@ -4,6 +4,8 @@ AI-powered support agent for ParcelPilot's B2B logistics platform, built as a su
 
 **Stack:** Mistral Large 2 - LangGraph - FastAPI + WebSocket - HuggingFace Inference API (BAAI/bge-small-en-v1.5) - Supabase (pgvector + structured data + conversation history)
 
+**Hosted:** https://parcelpilot-agent.onrender.com
+
 ---
 
 ## What Was Built
@@ -26,7 +28,7 @@ Both user contexts from the assessment spec are implemented in a single applicat
 | State-changing action tool | `create_action` - creates escalation tickets; mocked locally, logs to `actions_log` |
 | Confirmation gate | Natural conversation flow: agent proposes with `execute=False`, asks "Shall I go ahead?", reads DB history on next turn to detect user's yes/no before calling `execute=True` |
 | Multi-step requests | Agent chains tools freely: e.g. order lookup - account fetch - agreement search - SLA calculation - escalation decision |
-| Chat interface | Custom FastAPI + WebSocket UI served at `http://localhost:8000`; shows source chips and active tool state |
+| Chat interface | Custom FastAPI + WebSocket UI served at `http://localhost:8000`; streams tokens in real time and shows active tool calls as they happen |
 
 ---
 
@@ -115,7 +117,7 @@ Source authority is tiered and enforced in the system prompt and in the UI:
 
 **Deprecated source (02_Support_Policy_v2):** explicitly excluded - if retrieved, the agent ignores it.
 
-When the agent retrieves chunks from both a customer agreement and a general policy on the same topic, it applies the agreement and flags the conflict. The UI surfaces a "Source conflict - higher-authority document applied" chip on any response where this occurred.
+When the agent retrieves chunks from both a customer agreement and a general policy on the same topic, it applies the agreement and flags the conflict in its response - stating which source governed and why the lower-authority source was overridden.
 
 ### Major Technical Trade-offs
 
@@ -156,15 +158,13 @@ Three concrete mechanisms:
 
 ## What I Would Build Next (Prioritised)
 
-1. **Hosted deployment** - the app is ready to deploy on Render or Railway (FastAPI + static files); blocked only by Supabase connection string exposure in env. Would use secrets management and deploy within a day.
+1. **Real ticket system integration** - `create_action` currently writes to `actions_log`. Connecting it to Linear, Zendesk, or Freshdesk would make escalations actionable without a human copy-paste step.
 
 2. **Feedback loop on source conflicts** - when staff override a conflict decision, log the override. Feed overrides back as fine-tuning signal or few-shot examples to reduce future false conflicts.
 
-3. **Real ticket system integration** - `create_action` currently writes to `actions_log`. Connecting it to Linear, Zendesk, or Freshdesk would make escalations actionable without a human copy-paste step.
+3. **Per-agent memory** - currently each conversation starts fresh (last 6 messages). Storing a short summary of each resolved ticket in a vector table would let the agent answer "has this customer had this issue before?" without re-reading the full ticket history.
 
-4. **Per-agent memory** - currently each conversation starts fresh (last 6 messages). Storing a short summary of each resolved ticket in a vector table would let the agent answer "has this customer had this issue before?" without re-reading the full ticket history.
-
-5. **Eval harness** - the functional tests cover the happy path. A continuous eval harness that runs on every deploy against adversarial prompts (prompt injection, cross-account data requests, deprecated policy citations) would catch regressions before they reach staff.
+4. **Eval harness** - the functional tests cover the happy path. A continuous eval harness that runs on every deploy against adversarial prompts (prompt injection, cross-account data requests, deprecated policy citations) would catch regressions before they reach staff.
 
 **What I intentionally left out:**
 - Real email/notification delivery on escalation (mocked locally as intended)
