@@ -5,8 +5,9 @@ services:
     region: singapore
     plan: free
     branch: main
+    rootDir: parcelpilot-agent
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn ui.server:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m ui.server
     autoDeploy: true
     envVars:
       - key: MISTRAL_API_KEY
