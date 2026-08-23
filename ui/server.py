@@ -299,7 +299,7 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
                 await _send(ws, type="tool_end", name=name,
                             latency_ms=lat, preview=preview)
 
-            elif kind == "on_chain_end" and name in ("agent_node", "tool_node"):
+            elif kind == "on_chain_end":
                 out = data.get("output", {})
                 if isinstance(out, dict):
                     srcs = out.get("sources_used") or []
@@ -307,6 +307,14 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
                         captured_sources = srcs
                     if out.get("conflict_detected"):
                         captured_conflict = True
+                    # Write back state fields that must persist between turns
+                    if "confirmation_state" in out:
+                        session["state"]["confirmation_state"] = out["confirmation_state"]
+                    if "pending_action" in out:
+                        session["state"]["pending_action"] = out["pending_action"]
+                    # Graph root event has the full final messages list
+                    if "messages" in out and name not in ("agent_node", "tool_node", "confirm_node"):
+                        session["state"]["messages"] = list(out["messages"])
 
         session["log"].append({
             "time": _ts(), "type": "AGENT_REPLY",
@@ -320,9 +328,11 @@ async def _handle_chat(ws: WebSocket, session: dict, content: str) -> None:
             if key not in seen:
                 seen.add(key)
                 deduped.append(src)
+        requires_confirm = session["state"]["confirmation_state"] == "PENDING_CONFIRMATION"
         await _send(ws, type="message_end",
                     sources=deduped[:5],
-                    conflict=captured_conflict)
+                    conflict=captured_conflict,
+                    requires_confirm=requires_confirm)
 
     except Exception as e:
         log.exception("Chat handler error")

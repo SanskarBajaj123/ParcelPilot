@@ -120,6 +120,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .typing-dots span:nth-child(3){animation-delay:.4s}
 @keyframes tdot{0%,80%,100%{transform:scale(.55);opacity:.35}40%{transform:scale(1);opacity:1}}
 #chat-input:disabled{opacity:.5;cursor:not-allowed}
+.confirm-actions{display:flex;gap:8px;margin-top:10px}
+.confirm-btn{padding:7px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:opacity .15s}
+.confirm-btn.yes{background:#22c55e;color:#fff}
+.confirm-btn.no{background:var(--sur2);color:var(--tx);border:1px solid var(--bor2)}
+.confirm-btn:hover{opacity:.85}
+.disconnected-msg{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35);border-radius:8px;padding:8px 14px;font-size:12px;color:#ef4444;margin-top:6px}
 .proactive-card{background:var(--sur2);border:1px solid var(--bor2);border-radius:var(--r2);padding:12px 14px;margin:4px 0}
 .proactive-card.amber{border-left:3px solid var(--am)}
 .proactive-card.cyan{border-left:3px solid var(--cy)}
@@ -434,12 +440,27 @@ function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.onmessage = e => handleServerMsg(JSON.parse(e.data));
-  ws.onclose   = () => { ws = null; };
+  ws.onclose   = () => { ws = null; if (session.authed) showDisconnectedBanner(); };
   ws.onerror   = () => { ws = null; };
 }
 
+function showDisconnectedBanner() {
+  const wrap = document.getElementById('msgs');
+  if (!wrap || wrap.querySelector('.disconnected-msg')) return;
+  const el = document.createElement('div');
+  el.className = 'disconnected-msg';
+  el.textContent = 'Connection lost. Please refresh the page to reconnect.';
+  wrap.appendChild(el);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
 function wsSend(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  } else if (obj.type === 'message' || obj.type === 'confirm') {
+    showDisconnectedBanner();
+    finishStreaming();
+  }
 }
 
 // ── Server message handler ───────────────────────────────────────────────────
@@ -469,7 +490,7 @@ function handleServerMsg(msg) {
       updateToolStep(msg.name, msg.latency_ms);
       break;
     case 'message_end':
-      onMessageEnd(msg.sources || [], msg.conflict || false);
+      onMessageEnd(msg.sources || [], msg.conflict || false, msg.requires_confirm || false);
       break;
     case 'proactive_scan':
       renderProactiveScan(msg.results);
@@ -763,21 +784,30 @@ function onToken(tok) {
   document.getElementById('msgs').scrollTop = 9999;
 }
 
-function onMessageEnd(sources, conflict) {
+function onMessageEnd(sources, conflict, requiresConfirm) {
   if (streamEl) {
     const blink = streamEl.querySelector('.blink');
     if (blink) blink.remove();
+    const bubble = streamEl.querySelector('.msg-bubble');
     if (sources && sources.length) {
       const srcDiv = document.createElement('div');
       srcDiv.className = 'sources';
       srcDiv.innerHTML = sources.map(s => `<span class="src-chip">- ${esc(s.source_file || s)}</span>`).join('');
-      streamEl.querySelector('.msg-bubble').appendChild(srcDiv);
+      bubble.appendChild(srcDiv);
     }
     if (conflict) {
       const warnDiv = document.createElement('div');
       warnDiv.className = 'conflict-warn';
       warnDiv.textContent = 'Source conflict - higher-authority document applied.';
-      streamEl.querySelector('.msg-bubble').appendChild(warnDiv);
+      bubble.appendChild(warnDiv);
+    }
+    if (requiresConfirm) {
+      const actDiv = document.createElement('div');
+      actDiv.className = 'confirm-actions';
+      actDiv.innerHTML = `
+        <button class="confirm-btn yes" onclick="sendConfirm(true, this.closest('.confirm-actions'))">Yes, go ahead</button>
+        <button class="confirm-btn no"  onclick="sendConfirm(false, this.closest('.confirm-actions'))">Cancel</button>`;
+      bubble.appendChild(actDiv);
     }
     if (threads.length) {
       threads[0].label = streamText.replace(/\*\*/g,'').substring(0,38) + '...';
@@ -785,6 +815,17 @@ function onMessageEnd(sources, conflict) {
     }
   }
   finishStreaming();
+}
+
+function sendConfirm(value, actionsEl) {
+  if (actionsEl) actionsEl.remove();
+  const label = value ? 'Yes, go ahead' : 'Cancel';
+  appendUserMsg(label);
+  wsSend({ type: 'confirm', value });
+  const input = document.getElementById('chat-input');
+  input.disabled = true;
+  document.getElementById('send-btn').disabled = true;
+  showThinkingBubble();
 }
 
 function finishStreaming() {
