@@ -2,7 +2,7 @@
 
 AI-powered support agent for ParcelPilot's B2B logistics platform, built as a submission for the CalQuity AI Engineer assessment.
 
-**Stack:** Mistral Large 2 · LangGraph · FastAPI + WebSocket · HuggingFace Inference API (BAAI/bge-small-en-v1.5) · Supabase (pgvector + structured data)
+**Stack:** Mistral Large 2 - LangGraph - FastAPI + WebSocket - HuggingFace Inference API (BAAI/bge-small-en-v1.5) - Supabase (pgvector + structured data + conversation history)
 
 ---
 
@@ -24,56 +24,98 @@ Both user contexts from the assessment spec are implemented in a single applicat
 | Document search tool | `search_documents` - HF embed + pgvector semantic search |
 | Structured data tool | `query_data` - account, order, ticket lookups scoped by role |
 | State-changing action tool | `create_action` - creates escalation tickets; mocked locally, logs to `actions_log` |
-| Confirmation gate | `execute=False` draft → `PENDING_CONFIRMATION` state → user must reply yes/no |
-| Multi-step requests | Agent chains tools freely: e.g. order lookup → account fetch → agreement search → SLA calculation → escalation decision |
+| Confirmation gate | Natural conversation flow: agent proposes with `execute=False`, asks "Shall I go ahead?", reads DB history on next turn to detect user's yes/no before calling `execute=True` |
+| Multi-step requests | Agent chains tools freely: e.g. order lookup - account fetch - agreement search - SLA calculation - escalation decision |
 | Chat interface | Custom FastAPI + WebSocket UI served at `http://localhost:8000`; shows source chips and active tool state |
 
 ---
 
-## Architecture Note
+## Architecture
 
 ### Agent Design
 
 ```
 ui/static/index.html  (custom chat UI - vanilla JS + WebSocket)
-    │  WebSocket ws://localhost:8000/ws/{session_id}
-    ▼
+    |  WebSocket ws://localhost:8000/ws
+    v
 ui/server.py  (FastAPI + WebSocket server)
-    │
-    ▼
+    |  saves user message to Supabase conversation_messages
+    |  fetches last 3 user + 3 assistant messages from DB
+    |  builds fresh AgentState with DB history each turn
+    v
 agent/graph.py  (LangGraph StateGraph)
-    ├── agent_node     - Mistral Large 2 with function calling
-    ├── tool_node      - dispatches to 3 tools, enforces access scope
-    └── confirm_node   - intercepts create_action(execute=False) and pauses for yes/no
+    |
+    START -> agent_node
+               |
+               +-- (tool calls?) --> tool_node --> agent_node (loop)
+               |
+               +-- (no tool calls) --> END
 ```
 
-The graph runs `agent_node → tool_node` in a loop until the model stops calling tools, then streams the final response. If a tool call produces a `PENDING_CONFIRMATION` state, the graph pauses and waits for the next user message before executing.
+The graph is intentionally simple: two nodes in a loop. Confirmation is handled entirely through natural conversation - the agent proposes an action, asks "Shall I go ahead?", and reads the DB-persisted history on the next turn to detect the user's reply.
+
+### Confirmation Flow
+
+This is the most important design decision in the codebase:
+
+```
+Turn 1 (user asks for an action):
+  agent_node calls create_action(execute=False)
+  tool_node returns draft summary
+  agent_node generates: "Here's what I'll do: [draft]. Shall I go ahead?"
+  ui/server.py saves this as assistant message to conversation_messages
+
+Turn 2 (user replies "yes"):
+  ui/server.py saves "yes" as user message
+  ui/server.py fetches last 3+3 messages from DB (includes Turn 1 exchange)
+  Fresh AgentState is built with that history
+  agent_node sees the history: prior proposal + user's "yes"
+  agent_node calls create_action(execute=True)
+  Action is committed to actions_log
+```
+
+No state machine, no in-memory session state, no pending_action flag. The LLM reads the conversation history and makes the decision, just like a human would.
 
 ### Tool Design
 
 **`search_documents`** - takes a query string, embeds it via HuggingFace `BAAI/bge-small-en-v1.5`, runs a cosine similarity search against `document_chunks` in Supabase pgvector, and returns the top-K chunks with their source document name and authority tier. The tool returns source metadata alongside content so the agent can cite authority.
 
-**`query_data`** - accepts a structured intent (accounts, orders, tickets) and filters. For customer sessions, the Supabase client is initialised with `set_session_context(account_id)` before every query, and RLS policies reject any row not belonging to that account. For internal sessions, the same queries run without the account filter.
+**`query_data`** - accepts a structured intent (accounts, orders, tickets) and filters. For customer sessions, the Supabase client is initialised with `set_session_context(account_id)` before every query, and RLS policies reject any row not belonging to that account. For internal sessions, the same queries run without the account filter. Intents: `lookup_order`, `lookup_account`, `list_open_tickets`, `calculate_credit_eligibility`, `check_sla_breach`.
 
-**`create_action`** - accepts a ticket/escalation payload and an `execute` flag. When `execute=False`, it returns a draft for the user to review. When `execute=True` (after confirmation), it inserts into `actions_log`. Mocked locally - no external ticketing system integration.
+**`create_action`** - accepts a ticket/escalation payload and an `execute` flag. When `execute=False`, it returns a draft for the user to review (no side effects). When `execute=True` (after confirmation via conversation history), it inserts into `actions_log`. Mocked locally - no external ticketing system integration. Action types: `escalate_ticket`, `update_ticket_status`, `create_followup_task`.
+
+### Preemptive Document Retrieval
+
+On every user turn (before the LLM responds), `agent_node` runs a preemptive document search against the user's query. For customer sessions, it also runs a targeted search for their specific agreement (e.g. Northstar Enterprise Agreement) to ensure it is always in context. This prevents the model from answering from memory when a policy document exists.
+
+### Conversation History (DB-backed)
+
+Each turn:
+1. User message is saved to `conversation_messages` table (session_id, user_id, role, content)
+2. Last 3 user + last 3 assistant messages are fetched, sorted chronologically
+3. A fresh `AgentState` is built with those messages as history
+4. After streaming, assistant reply is saved to `conversation_messages`
+
+This means the LLM always has the prior exchange in context, enabling the natural confirmation flow without any in-memory state.
 
 ### Document and Structured-Data Handling
 
 PDFs are chunked at 600 tokens with 100-token overlap (preserving sentence boundaries) and embedded at ingestion time. Each chunk stores its source document name. The xlsx is parsed into three Supabase tables: `accounts`, `orders`, `tickets`.
 
-The system prompt tells the model to prefer structured data for factual lookups (order status, ticket state, account plan) and document search for policy/SLA/agreement questions. It also tells the model to use `query_data` first for account-specific questions since structured data is more authoritative than policy text for instance-level facts.
+The system prompt tells the model to prefer structured data for factual lookups (order status, ticket state, account plan) and document search for policy/SLA/agreement questions.
 
-### Source Reliability and Conflict Handling
+### Source Authority Hierarchy
 
 Source authority is tiered and enforced in the system prompt and in the UI:
 
 1. **Customer Agreement** (Northstar, LumenWorks) - highest authority; overrides all general policy
-2. **Support Policy v3 CURRENT** - current general policy
+2. **Support Policy v3 CURRENT** (effective 1 May 2026) - current general policy
 3. **SOPs** (Cancellation and Credit, Product Ops) - operational detail
-4. **Support Policy v2 DEPRECATED** - lowest; used only when v3 has no coverage
-5. **Historical ticket resolutions** - context only; may be incorrect
+4. **Historical ticket resolutions** - context only; may be incorrect
 
-When the agent retrieves chunks from both a customer agreement and a general policy on the same topic, it is instructed to apply the agreement and flag the conflict. The UI surfaces a "Source conflict - higher-authority document applied" chip on any response where this occurred. This chip is injected by the server when it detects multi-source responses with differing authority tiers.
+**Deprecated source (02_Support_Policy_v2):** explicitly excluded - if retrieved, the agent ignores it.
+
+When the agent retrieves chunks from both a customer agreement and a general policy on the same topic, it applies the agreement and flags the conflict. The UI surfaces a "Source conflict - higher-authority document applied" chip on any response where this occurred.
 
 ### Major Technical Trade-offs
 
@@ -81,9 +123,11 @@ When the agent retrieves chunks from both a customer agreement and a general pol
 
 **FastAPI + WebSocket over Chainlit** - Chainlit's session model made it hard to implement the dual auth flow (customer PIN vs staff password) within a single app without routing hacks. A custom UI gives full control over the auth gate, mode switching, source chip rendering, and the confirmation gate UX.
 
-**Supabase RLS as the enforcement layer** - model-instruction-only access control fails under adversarial prompts. RLS makes the enforcement cryptographic: a query issued under the wrong session context returns zero rows regardless of what the model asks for.
+**Supabase RLS as the enforcement layer** - model-instruction-only access control fails under adversarial prompts. RLS makes the enforcement structural: a query issued under the wrong session context returns zero rows regardless of what the model asks for.
 
 **HuggingFace Inference API for embeddings** - avoids a local GPU requirement. The cold-start latency (first embed call after model sleep is ~3s) is the trade-off; acceptable for a demo but would need a dedicated endpoint in production.
+
+**DB-backed history over in-memory session state** - enables the natural confirmation flow and means conversation history survives server restarts. The trade-off is a Supabase round-trip per turn, which adds ~50ms.
 
 ---
 
@@ -93,9 +137,10 @@ When the agent retrieves chunks from both a customer agreement and a general pol
 
 Implemented as an automatic scan that fires when internal ops staff log in. The scanner (`proactive/detector.py`) queries open tickets in real time and checks for:
 
-- SLA breach risk - tickets where elapsed time exceeds the applicable SLA target (resolved from customer agreement if present, else policy v3 defaults)
-- Stuck or failed pickups - orders where carrier status is stale relative to expected pickup window
-- Ticket clusters - groups of 2+ tickets with similar subjects across one or more accounts (simple keyword clustering; flags potential product-wide issues)
+- **SLA breach risk** - tickets where elapsed time exceeds the applicable SLA target (resolved from customer agreement if present, else policy v3 defaults)
+- **Stuck or failed pickups** - orders where carrier status is stale relative to expected pickup window
+- **Ticket clusters** - groups of 2+ tickets with similar subjects across one or more accounts (Jaccard similarity on keyword sets; flags potential product-wide issues)
+- **Multi-customer patterns** - clusters that span 2+ accounts are flagged separately as potential platform-wide issues
 
 Results are pushed as a system message before the first user turn so staff immediately see what needs attention without asking.
 
@@ -104,29 +149,29 @@ Results are pushed as a system message before the first user turn so staff immed
 Three concrete mechanisms:
 
 1. **Source authority hierarchy** - described above; enforced in prompt and surfaced in UI chips.
-2. **Conflict detection** - when retrieval returns chunks from documents of different authority tiers covering the same topic, the server detects the overlap and injects a conflict flag into the response context. The agent is instructed to state which source it applied and why.
-3. **Confirmation gate** - no state-changing action executes without explicit user yes/no. The draft is shown before execution so staff can review the exact ticket content before it is created.
+2. **Conflict detection** - when retrieval returns chunks from documents of different authority tiers covering the same topic, the server detects the overlap and injects a conflict flag. The agent states which source it applied and why.
+3. **Confirmation gate** - no state-changing action executes without explicit user yes/no via natural conversation. The draft is shown before execution so staff can review exact content before it is committed.
 
 ---
 
 ## What I Would Build Next (Prioritised)
 
-1. **Hosted deployment** - the assessment prefers a hosted link. The app is ready to deploy on Render or Railway (FastAPI + static files); blocked only by Supabase connection string exposure in env. Would use secrets management and deploy within a day.
+1. **Hosted deployment** - the app is ready to deploy on Render or Railway (FastAPI + static files); blocked only by Supabase connection string exposure in env. Would use secrets management and deploy within a day.
 
-2. **Feedback loop on source conflicts** - when staff override a conflict decision ("use the policy, not the agreement"), log the override. Feed overrides back as fine-tuning signal or few-shot examples in the prompt to reduce future false conflicts.
+2. **Feedback loop on source conflicts** - when staff override a conflict decision, log the override. Feed overrides back as fine-tuning signal or few-shot examples to reduce future false conflicts.
 
-3. **Real ticket system integration** - `create_action` currently writes to `actions_log`. Connecting it to Linear, Zendesk, or Freshdesk would make escalations actionable without a human copy-paste step. High value for the ops team; low engineering cost given the tool interface is already abstracted.
+3. **Real ticket system integration** - `create_action` currently writes to `actions_log`. Connecting it to Linear, Zendesk, or Freshdesk would make escalations actionable without a human copy-paste step.
 
-4. **Per-agent memory** - currently each conversation starts fresh. Storing a short summary of each resolved ticket (account, issue, resolution) in a vector table would let the agent answer "has this customer had this issue before?" without re-reading the full ticket history.
+4. **Per-agent memory** - currently each conversation starts fresh (last 6 messages). Storing a short summary of each resolved ticket in a vector table would let the agent answer "has this customer had this issue before?" without re-reading the full ticket history.
 
-5. **Eval harness** - the 19 functional test cases in `tests/functional_tests.py` cover the happy path. A continuous eval harness that runs on every deploy against a fixed set of adversarial prompts (prompt injection, cross-account data requests, deprecated policy citations) would catch regressions before they reach staff.
+5. **Eval harness** - the functional tests cover the happy path. A continuous eval harness that runs on every deploy against adversarial prompts (prompt injection, cross-account data requests, deprecated policy citations) would catch regressions before they reach staff.
 
 **What I intentionally left out:**
 - Real email/notification delivery on escalation (mocked locally as intended)
 - Multi-language support (all source docs are English)
-- Fine-tuning (Mistral Large 2 zero-shot is accurate enough for this data volume; fine-tuning would matter at 10x the ticket volume)
+- Fine-tuning (Mistral Large 2 zero-shot is accurate enough for this data volume)
 
-**One metric to judge usefulness:** first-contact resolution rate - the percentage of customer queries answered fully by the agent without a human follow-up. Baseline from the current manual process is the denominator; anything above 60% first-contact on policy/SLA questions would justify the ops time saved.
+**One metric to judge usefulness:** first-contact resolution rate - the percentage of customer queries answered fully by the agent without a human follow-up. Anything above 60% first-contact on policy/SLA questions would justify the ops time saved.
 
 ---
 
@@ -137,10 +182,10 @@ Built end-to-end with **Claude Code** (claude-sonnet-4-6) used for:
 - Writing and debugging the FastAPI WebSocket server
 - Supabase schema, RLS policy SQL, and vector search function
 - System prompt design and source authority logic
-- Functional test suite (19 test cases run both via script and manual browser)
+- Functional test suite
 - README and documentation
 
-All code was reviewed, tested, and run locally before commit. The agent design decisions (authority hierarchy, conflict detection approach, confirmation gate implementation) were made by me; Claude implemented them.
+All code was reviewed, tested, and run locally before commit. The agent design decisions (authority hierarchy, conflict detection approach, DB-backed confirmation flow) were made by me; Claude implemented them.
 
 ---
 
@@ -187,7 +232,7 @@ Run in [Supabase Dashboard - SQL Editor](https://app.supabase.com):
 scripts/setup_supabase.sql
 ```
 
-Creates: `accounts`, `orders`, `tickets`, `document_chunks` (pgvector), `actions_log`, all RLS policies, and the vector search function.
+Creates: `accounts`, `orders`, `tickets`, `document_chunks` (pgvector), `conversation_messages` (chat history), `actions_log`, all RLS policies, and the vector search function.
 
 ### 4. Add data files
 
@@ -225,32 +270,53 @@ Open [http://localhost:8000](http://localhost:8000).
 
 ```
 ui/static/index.html  (chat UI)
-    │  WebSocket
-    ▼
+    |  WebSocket
+    v
 ui/server.py  (FastAPI)
-    │
-    ▼
+    |  saves/fetches conversation_messages (Supabase)
+    v
 agent/graph.py  (LangGraph StateGraph)
-    ├── agent_node     - Mistral Large 2 (function calling)
-    ├── tool_node      - 3 tools, role-scoped
-    └── confirm_node   - confirmation gate for actions
+    +-- agent_node  - Mistral Large 2 (function calling + preemptive search)
+    +-- tool_node   - 3 tools, role-scoped, account-isolated
 
 Tools:
-  agent/tools/search_documents.py  - HF embed → pgvector
+  agent/tools/search_documents.py  - HF embed -> pgvector cosine similarity
   agent/tools/query_data.py        - Supabase structured queries (RLS enforced)
-  agent/tools/create_action.py     - draft/execute pattern → actions_log
+  agent/tools/create_action.py     - draft/execute pattern -> actions_log
 
 Supporting:
-  agent/state.py      - AgentState TypedDict
-  agent/history.py    - time-based message filtering (1h window)
-  agent/prompts.py    - system prompt with source authority hierarchy
-  proactive/detector.py  - SLA breach + failed-pickup + cluster scanner
+  agent/state.py      - AgentState TypedDict (messages, user_context, sources_used)
+  agent/history.py    - message filtering
+  agent/prompts.py    - system prompt with source authority hierarchy + confirmation steps
+  proactive/detector.py  - SLA breach + failed-pickup + Jaccard cluster scanner
 
 Infrastructure:
-  scripts/setup_supabase.sql  - schema + RLS + vector search function
+  scripts/setup_supabase.sql  - schema + RLS + pgvector search function
   scripts/ingest.py           - PDF + xlsx ingestion pipeline
-  tests/functional_tests.py   - 19 functional test cases
+  tests/functional_tests.py   - functional test cases
 ```
+
+---
+
+## Test Credentials
+
+### Customer Portal
+
+| Account | PIN | Name |
+|---|---|---|
+| ACCT-001 | 1234 | Northstar Logistics |
+| ACCT-002 | 5678 | LumenWorks |
+| ACCT-003 | 4321 | (demo account) |
+| ACCT-004 | 8765 | (demo account) |
+
+### Internal Ops
+
+| Username | Password |
+|---|---|
+| priya | ParcelPilot@2026 |
+| rohit | Support@2026! |
+| maya | Ops#Secure99 |
+| admin | Admin$Master1 |
 
 ---
 
@@ -262,7 +328,5 @@ Infrastructure:
 | `HF_TOKEN` | Yes | - | HuggingFace Inference API token |
 | `SUPABASE_URL` | Yes | - | Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes | - | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | - | Service role key (ingestion only) |
-| `HISTORY_WINDOW_HOURS` | No | `1` | Conversation history window |
-| `MAX_HISTORY_MESSAGES` | No | `30` | Hard cap on message count |
-| `RETRIEVAL_TOP_K` | No | `5` | Document chunks per search |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | - | Service role key (ingestion + actions) |
+| `MAX_HISTORY_TURNS` | No | `3` | Number of prior turns to feed LLM per message |
