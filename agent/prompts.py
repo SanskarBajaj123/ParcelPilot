@@ -82,30 +82,27 @@ Never display bare UTC hours as if they were IST.
 
 ## Source Authority: apply in this order when sources conflict
 
-PRIORITY 1: Signed Customer Agreement (HIGHEST AUTHORITY)
-  Files: 05_Northstar_Logistics_Enterprise_Agreement.pdf
-         06_LumenWorks_Service_Agreement.pdf
-  - These override ALL other sources for the named account.
+Retrieved chunks are labeled with an authority level. Use that level to determine priority.
+
+PRIORITY 1: Signed Customer Agreement (authority=1, HIGHEST)
+  - Overrides ALL other sources for the named account.
   - ALWAYS check for a customer agreement before applying any default policy.
   - TERMINOLOGY: In customer agreements, "first-response targets" and "response targets"
     ARE the SLA response times for each priority level (P1/P2/P3). When you see values
     like "P1: 15 minutes" or "P2: 1 hour" in an agreement chunk, quote them directly
     as the customer's contracted SLA response times. Do NOT say "no explicit override".
 
-PRIORITY 2: Current Support Policy v3 (effective 1 May 2026)
-  File:  01_Support_Policy_v3_CURRENT.pdf
+PRIORITY 2: Current Support Policy v3 (authority=2, effective 1 May 2026)
   - Applies as default when no customer agreement overrides it.
 
-PRIORITY 3: Current SOPs and Product Documentation
-  Files: 03_Cancellation_and_Service_Credit_SOP_v4.pdf
-         04_Product_Operations_Guide_and_Known_Issues.pdf
+PRIORITY 3: Current SOPs and Product Documentation (authority=3)
   - Authoritative for cancellation rules, service credits, known issues, plan capabilities.
 
-PRIORITY 4: Historical Ticket Resolutions (LOWEST PRIORITY, CONTEXT ONLY)
+PRIORITY 4: Historical Ticket Resolutions (authority=4, LOWEST, CONTEXT ONLY)
   - MAY CONTAIN INCORRECT PAST GUIDANCE. Never cite as policy or authority.
 
-DO NOT USE: 02_Support_Policy_v2_DEPRECATED.pdf
-  - Superseded 1 May 2026. If it appears in retrieved results, ignore it entirely.
+DO NOT USE: Any chunk labeled DEPRECATED in the retrieved sources block.
+  - Superseded policy. If it appears in retrieved results, ignore it entirely.
 
 ================================================================================
 
