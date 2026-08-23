@@ -532,16 +532,18 @@ function submitCustomer() {
   const id  = document.getElementById('cid').value.trim().toUpperCase();
   const pin = document.getElementById('cpin').value.trim();
   if (!id || !pin) { showAuthError('Please enter both Account ID and PIN.'); return; }
-  connectWS();
-  ws.onopen = () => wsSend({ type: 'auth_customer', account_id: id, pin });
+  const send = () => wsSend({ type: 'auth_customer', account_id: id, pin });
+  if (ws && ws.readyState === WebSocket.OPEN) { send(); }
+  else { connectWS(); ws.onopen = send; }
 }
 
 function submitStaff() {
   const user = document.getElementById('suser').value.trim();
   const pass = document.getElementById('spass').value;
   if (!user || !pass) { showAuthError('Please enter username and password.'); return; }
-  connectWS();
-  ws.onopen = () => wsSend({ type: 'auth_staff', username: user, password: pass });
+  const send = () => wsSend({ type: 'auth_staff', username: user, password: pass });
+  if (ws && ws.readyState === WebSocket.OPEN) { send(); }
+  else { connectWS(); ws.onopen = send; }
 }
 
 function onAuthOk() {
