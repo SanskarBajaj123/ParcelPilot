@@ -197,6 +197,30 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 /* ── Util ── */
 :focus-visible{outline:2px solid var(--v);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* ── Mobile responsive ─────────────────────────────────────────────────────── */
+#sb-toggle{display:none;width:34px;height:34px;border-radius:8px;border:1px solid var(--bor2);background:var(--sur2);cursor:pointer;align-items:center;justify-content:center;flex-shrink:0}
+#sb-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
+
+@media(max-width:768px){
+  #app{grid-template-columns:1fr;grid-template-areas:"hdr" "main"}
+  #sb{
+    display:none;
+    position:fixed;top:0;left:0;bottom:0;width:80vw;max-width:300px;
+    z-index:100;box-shadow:4px 0 24px rgba(0,0,0,.5);
+    transition:transform .2s ease;
+  }
+  #sb.sb-open{display:flex}
+  #sb-overlay.sb-open{display:block}
+  #sb-toggle{display:flex}
+  #msgs{padding:16px 12px 12px}
+  .msg-body{max-width:92%}
+  #composer-wrap{padding:8px 10px}
+  .auth-card{width:100%;max-width:420px;padding:28px 20px 24px;border-radius:12px}
+  #hdr{padding:0 12px;gap:8px}
+  .h-logo-name{display:none}
+  .logout-btn{font-size:11px;padding:4px 8px}
+}
 </style>
 </head>
 <body>
@@ -204,8 +228,14 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 <!-- MAIN APP -->
 <div id="app">
 
+  <!-- Mobile sidebar overlay -->
+  <div id="sb-overlay" onclick="closeSidebar()"></div>
+
   <!-- Header -->
   <header id="hdr">
+    <button id="sb-toggle" onclick="toggleSidebar()" aria-label="Toggle menu">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
     <div class="h-logo">
       <div class="h-logo-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8.5L12 3 3 8.5M21 8.5v7L12 21l-9-5.5V8.5M21 8.5L12 14 3 8.5M12 14v7"/></svg></div>
       <div class="h-logo-name">ParcelPilot</div>
@@ -445,6 +475,24 @@ function handleServerMsg(msg) {
       break;
   }
 }
+
+// ── Mobile sidebar ───────────────────────────────────────────────────────────
+function toggleSidebar() {
+  const sb  = document.getElementById('sb');
+  const ov  = document.getElementById('sb-overlay');
+  const open = sb.classList.toggle('sb-open');
+  ov.classList.toggle('sb-open', open);
+}
+function closeSidebar() {
+  document.getElementById('sb').classList.remove('sb-open');
+  document.getElementById('sb-overlay').classList.remove('sb-open');
+}
+// Close sidebar when a conversation or nav item is clicked on mobile
+document.addEventListener('click', e => {
+  if (window.innerWidth <= 768 && (e.target.closest('.sb-item') || e.target.closest('.sb-nav-item'))) {
+    closeSidebar();
+  }
+});
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 let _authMode = null;

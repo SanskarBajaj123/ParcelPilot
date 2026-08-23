@@ -7,6 +7,7 @@ All queries use parameterised calls â€" no raw SQL injection risk.
 
 import os
 from datetime import datetime, timezone
+from langsmith import traceable
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -41,6 +42,7 @@ def _elapsed_hours(dt_str: str | None) -> float | None:
     return max(0.0, (ref - dt).total_seconds() / 3600)
 
 
+@traceable(name="Tool: Structured Data Query", run_type="tool")
 def query_data_fn(intent: str, params: dict, role: str, account_id: str = "") -> dict:
     """
     Execute a structured data query.

@@ -9,6 +9,7 @@ import os
 import time
 import httpx
 from langchain_core.tools import tool
+from langsmith import traceable
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -60,6 +61,7 @@ def _detect_conflict(chunks: list[dict]) -> bool:
     return False
 
 
+@traceable(name="Tool: Document Search", run_type="retriever")
 def search_documents_fn(query: str, account_scope: str | None = None) -> dict:
     """
     Search document chunks relevant to `query`.

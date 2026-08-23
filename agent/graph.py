@@ -78,7 +78,7 @@ def build_graph() -> StateGraph:
     # After confirm: the node itself produces the final AIMessage, end the turn
     builder.add_edge("confirm_node", END)
 
-    return builder.compile()
+    return builder.compile(name="ParcelPilot Support Agent")
 
 
 # Singleton compiled graph

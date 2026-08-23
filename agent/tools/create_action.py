@@ -9,6 +9,7 @@ import os
 import uuid
 import time
 from datetime import datetime, timezone
+from langsmith import traceable
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -24,6 +25,7 @@ VALID_ACTION_TYPES = {"escalate_ticket", "update_ticket_status", "create_followu
 VALID_STATUSES     = {"open", "closed", "escalated", "in_progress"}
 
 
+@traceable(name="Tool: Create Action", run_type="tool")
 def create_action_fn(
     action_type: str,
     payload:     dict,

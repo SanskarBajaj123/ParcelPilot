@@ -6,6 +6,7 @@ import os
 import json
 import time
 import logging
+from langsmith import traceable
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -48,6 +49,7 @@ def _is_rate_limit(exc: Exception) -> bool:
 def _is_retryable(exc: Exception) -> bool:
     return _is_rate_limit(exc) or "500" in str(exc) or "503" in str(exc)
 
+@traceable(name="LLM: Mistral Large 2", run_type="llm")
 @retry(
     retry=retry_if_exception_type(Exception),
     stop=stop_after_attempt(6),
@@ -63,6 +65,11 @@ def _invoke_llm(llm, messages: list) -> AIMessage:
             logger.warning("Mistral API error (%s) - will retry with backoff", exc)
             raise   # tenacity catches and retries
         raise       # non-retryable: propagate immediately
+
+@traceable(name="Preemptive: Document Search", run_type="retriever")
+def _preemptive_search(query: str, account_scope: str | None) -> dict:
+    return search_documents_fn(query=query, account_scope=account_scope)
+
 
 # ── Tool schemas for Mistral function calling ────────────────────────────────
 TOOL_SCHEMAS = [
@@ -135,6 +142,7 @@ TOOL_SCHEMAS = [
 
 # ── agent_node ────────────────────────────────────────────────────────────────
 
+@traceable(name="Agent: Reasoning", run_type="chain")
 def agent_node(state: AgentState) -> dict:
     """
     Main LLM call. Assembles:
@@ -174,11 +182,11 @@ def agent_node(state: AgentState) -> dict:
             # For customers, append their account name to bias retrieval toward their agreement doc
             enhanced_query = f"{raw_query} {account_name} agreement" if (role == "customer" and account_name) else raw_query
 
-            search_result = search_documents_fn(query=enhanced_query, account_scope=account_scope)
+            search_result = _preemptive_search(query=enhanced_query, account_scope=account_scope)
 
             # Fallback: if no customer-agreement chunk surfaced, do a targeted agreement search
             if role == "customer" and account_name and not any(c["authority_level"] == 1 for c in search_result["chunks"]):
-                targeted = search_documents_fn(
+                targeted = _preemptive_search(
                     query=f"{account_name} service agreement SLA priority response time credit cancellation",
                     account_scope=account_scope,
                 )
@@ -226,6 +234,7 @@ def agent_node(state: AgentState) -> dict:
 
 # ── tool_node ─────────────────────────────────────────────────────────────────
 
+@traceable(name="Tools: Dispatch", run_type="chain")
 def tool_node(state: AgentState) -> dict:
     """
     Dispatches tool calls from the latest AIMessage.
@@ -352,6 +361,7 @@ def tool_node(state: AgentState) -> dict:
 
 # ── confirm_node ──────────────────────────────────────────────────────────────
 
+@traceable(name="Confirm: Action Gate", run_type="chain")
 def confirm_node(state: AgentState) -> dict:
     """
     Handles the user's yes/no response to a pending action.
