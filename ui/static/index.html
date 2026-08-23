@@ -399,9 +399,10 @@ let ws        = null;
 let session   = { role: null, name: null, accountId: null, authed: false };
 let threads   = [];
 let curThread = null;
-let streaming  = false;
-let streamEl   = null;
-let streamText = '';
+let streaming   = false;
+let streamEl    = null;
+let streamTxtEl = null;
+let streamText  = '';
 
 const CUSTOMERS = [
   { id:'ACCT-001', pin:'1234',  name:'Northstar Logistics', plan:'Enterprise' },
@@ -720,14 +721,14 @@ function onToken(tok) {
       <div class="msg-av">🤖</div>
       <div class="msg-body">
         <div class="msg-meta">ParcelPilot · ${timeNow()}</div>
-        <div class="msg-bubble"><span id="stream-txt"></span><span class="blink"></span></div>
+        <div class="msg-bubble"><span class="stream-txt"></span><span class="blink"></span></div>
       </div>`;
     wrap.appendChild(el);
-    streamEl = el;
+    streamEl    = el;
+    streamTxtEl = el.querySelector('.stream-txt');
   }
   streamText += tok;
-  const txtEl = document.getElementById('stream-txt');
-  if (txtEl) txtEl.innerHTML = md2html(streamText);
+  if (streamTxtEl) streamTxtEl.innerHTML = md2html(streamText);
   document.getElementById('msgs').scrollTop = 9999;
 }
 
@@ -756,9 +757,10 @@ function onMessageEnd(sources, conflict) {
 }
 
 function finishStreaming() {
-  streaming  = false;
-  streamEl   = null;
-  streamText = '';
+  streaming   = false;
+  streamEl    = null;
+  streamTxtEl = null;
+  streamText  = '';
   document.getElementById('send-btn').disabled = false;
   activeToolSteps = {};
 }
