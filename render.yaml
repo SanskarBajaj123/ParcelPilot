@@ -5,6 +5,7 @@ services:
     region: singapore
     plan: free
     branch: main
+    rootDir: parcelpilot-agent
     buildCommand: pip install -r requirements.txt
     startCommand: python ui/server.py
     autoDeploy: true
