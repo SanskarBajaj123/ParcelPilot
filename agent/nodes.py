@@ -31,7 +31,7 @@ MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "3"))
 
 # ── Mistral LLM ───────────────────────────────────────────────────────────────
 mistral_llm = ChatMistralAI(
-    model="mistral-large-latest",
+    model="open-mixtral-8x22b",
     api_key=MISTRAL_API_KEY,
     temperature=0.1,
     streaming=True,
